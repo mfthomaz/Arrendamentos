@@ -6,6 +6,10 @@ Aplicação web/PWA para gerir imóveis, contratos, cobranças e datas relevante
 
 Em **Contratos**, use **Arquivar** na linha do contrato e confirme a ação. O contrato deixa de contar como ativo e deixa de gerar novas cobranças e lembretes; o contrato e as cobranças/pagamentos já registados não são apagados. Consulte-os em **Rendas e pagamentos**, escolhendo o período correspondente. O filtro **Mostrar → Arquivados** permite localizar contratos arquivados; use **Restaurar** para reativar um contrato arquivado por engano sem recriar o histórico existente. Os dados locais e sincronizados recebem automaticamente os valores por omissão dos novos campos de arquivo.
 
+## Arrendamentos não habitacionais
+
+Ao criar ou editar um contrato, indique a finalidade **Não habitacional / empresa** para lojas ou outros arrendamentos não habitacionais, e registe a renda bruta acordada. A aplicação calcula uma retenção fixa de 25% e apresenta o valor líquido (75%) a receber. As cobranças, saldos em falta e validação dos pagamentos usam o valor líquido; a renda bruta e a retenção também ficam visíveis no contrato e na cobrança. Ao alterar a finalidade, as cobranças existentes desse contrato são recalculadas sem alterar a renda bruta nem os pagamentos já registados. Contratos existentes mantêm-se habitacionais até serem atualizados. A aplicação não submete declarações nem pagamentos fiscais.
+
 ## Demonstração local
 
 Sirva a pasta num servidor HTTP local, por exemplo com `npx serve .`, e abra o URL no navegador. A primeira execução sem Supabase cria cinco imóveis e quatro contratos de demonstração. Sem configurar um projeto, os dados ficam apenas no `localStorage` desse navegador e não são sincronizados.

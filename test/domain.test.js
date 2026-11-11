@@ -4,10 +4,13 @@ import {
   archiveContract,
   addMonths,
   createCharges,
+  getChargeNetAmount,
   getChargeStatus,
   getChargeSummary,
+  getChargeWithholding,
   getUpcomingEvents,
   restoreContract,
+  updateChargeWithholding,
 } from "../domain.js";
 
 test("addMonths clamps the day to the last day of the destination month", () => {
@@ -122,5 +125,81 @@ test("restoring an archived ended contract keeps its original status and clears 
     statusBeforeArchive: null,
     archivedAt: null,
     tenantName: "Rui",
+  });
+});
+
+test("non-residential charges retain 25 percent and track the 75 percent net rent", () => {
+  const contract = {
+    id: "c-shop",
+    status: "active",
+    nonResidential: true,
+    startDate: "2027-01-01",
+    monthlyRent: 1200,
+    paymentDueDay: 8,
+  };
+  const charge = createCharges([contract], [], "2027-02")[0];
+  const summary = getChargeSummary(
+    [contract],
+    [{ ...charge, payments: [{ amount: 450, date: "2027-02-08" }] }],
+    "2027-02",
+    "2027-02-10",
+  );
+
+  assert.equal(charge.amount, 1200);
+  assert.equal(charge.withholdingRate, 0.25);
+  assert.equal(charge.withholdingAmount, 300);
+  assert.equal(getChargeNetAmount(charge, contract), 900);
+  assert.equal(getChargeWithholding(charge, contract), 300);
+  assert.equal(summary.total, 900);
+  assert.equal(summary.received, 450);
+  assert.equal(summary.missing, 450);
+  assert.equal(summary.collectionRate, 0.5);
+  assert.equal(getChargeStatus({ ...charge, payments: [{ amount: 900 }] }, "2027-02-10", contract), "paid");
+});
+
+test("legacy charges use the non-residential net amount without rewriting payment history", () => {
+  const contract = {
+    id: "c-shop",
+    status: "active",
+    nonResidential: true,
+    startDate: "2027-01-01",
+    monthlyRent: 1200,
+  };
+  const charge = {
+    id: "old-charge",
+    contractId: contract.id,
+    period: "2027-02",
+    amount: 1200,
+    dueDate: "2027-02-08",
+    payments: [{ amount: 400, date: "2027-02-08" }],
+  };
+  const summary = getChargeSummary([contract], [charge], "2027-02", "2027-02-10");
+
+  assert.equal(getChargeNetAmount(charge, contract), 900);
+  assert.equal(summary.total, 900);
+  assert.equal(summary.received, 400);
+  assert.equal(summary.missing, 500);
+  assert.deepEqual(charge.payments, [{ amount: 400, date: "2027-02-08" }]);
+});
+
+test("changing a contract's use recalculates charge retention without changing gross rent or payments", () => {
+  const contract = { id: "c-shop", nonResidential: true };
+  const original = {
+    id: "charge-1",
+    amount: 1200,
+    payments: [{ amount: 500, date: "2027-02-08" }],
+  };
+
+  assert.deepEqual(updateChargeWithholding(original, contract), {
+    ...original,
+    withholdingRate: 0.25,
+    withholdingAmount: 300,
+    netAmount: 900,
+  });
+  assert.deepEqual(updateChargeWithholding({ ...original, withholdingRate: 0.25, withholdingAmount: 300, netAmount: 900 }, { nonResidential: false }), {
+    ...original,
+    withholdingRate: 0,
+    withholdingAmount: 0,
+    netAmount: 1200,
   });
 });

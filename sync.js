@@ -9,6 +9,7 @@ export function normalizeData(data) {
     status: contract.status || "active",
     statusBeforeArchive: contract.statusBeforeArchive ?? null,
     archivedAt: contract.archivedAt ?? null,
+    nonResidential: Boolean(contract.nonResidential),
   }));
   return normalized;
 }

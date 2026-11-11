@@ -66,6 +66,7 @@ test("legacy contracts receive default archive fields without changing existing 
     status: "active",
     statusBeforeArchive: null,
     archivedAt: null,
+    nonResidential: false,
   });
   assert.deepEqual(normalized.charges, legacy.charges);
   assert.deepEqual(normalized.properties, legacy.properties);
