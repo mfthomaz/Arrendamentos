@@ -50,6 +50,12 @@ npm run build
 
 O build estático para Pages é criado em `dist/`; não contém configuração nem credenciais Supabase.
 
+## Referências de funcionalidades de mercado
+
+As páginas oficiais consultadas descrevem, entre outras, cobrança e acompanhamento de rendas na Landlord Studio, pagamentos online, operações e opções para diferentes dimensões de carteira na Buildium, e contabilidade, cobranças e ferramentas de gestão de arrendamentos na Rentec Direct. Daí foram selecionados para a CasaThomaz o registo de imóveis e contratos, o livro de cobranças/pagamentos e atrasos, um dashboard resumido e uma agenda de datas, ajustados ao uso pessoal pedido. A agenda inclui a preparação do aviso dois meses antes da atualização anual e permite escolher 3–6 meses de horizonte.
+
+Estas referências não significam que a CasaThomaz inclua todas as funções desses produtos: não cobra rendas online, não oferece portal de inquilino, contabilidade integrada, sincronização bancária nem envio automático de mensagens. Não se comparam preços, que dependem do plano e mercado apresentados por cada fornecedor.
+
 ## Referências oficiais
 
 - [Supabase — Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security): políticas por linha e concessões de permissões são ambas necessárias.
@@ -57,4 +63,4 @@ O build estático para Pages é criado em `dist/`; não contém configuração n
 - [Supabase — autenticação por palavra-passe](https://supabase.com/docs/guides/auth/passwords) e [URLs de redirecionamento](https://supabase.com/docs/guides/auth/redirect-urls).
 - [GitHub Pages — fontes de publicação](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site) e [criação de um site](https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site).
 - [GitHub Pages — limites e utilização](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits) e [visibilidade](https://docs.github.com/en/enterprise-cloud@latest/pages/getting-started-with-github-pages/changing-the-visibility-of-your-github-pages-site).
-- [Landlord Studio](https://www.landlordstudio.com/pricing), [Buildium](https://www.buildium.com/features/) e [Rentec Direct](https://www.rentecdirect.com/features/) — inspiração para as funcionalidades de acompanhamento de arrendamentos; não são integrados.
+- [Landlord Studio — funcionalidades e planos](https://www.landlordstudio.com/pricing), [Buildium — funcionalidades](https://www.buildium.com/features/) e [Rentec Direct — funcionalidades](https://www.rentecdirect.com/features/).
