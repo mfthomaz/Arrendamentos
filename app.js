@@ -1,4 +1,5 @@
 import {
+  archiveContract,
   addMonths,
   createCharges,
   createDemoData,
@@ -6,6 +7,7 @@ import {
   getChargeSummary,
   getPaidAmount,
   getUpcomingEvents,
+  restoreContract,
   toISODate,
 } from "./domain.js";
 import {
@@ -13,6 +15,7 @@ import {
   emptyData,
   hasRecords,
   mergeSnapshots,
+  normalizeData,
 } from "./sync.js";
 
 const STORAGE_KEY = "casathomaz.v1";
@@ -35,6 +38,7 @@ let supabase = isSupabaseConfigured(supabaseConfig) ? createSupabaseClient(supab
 let state = supabase ? emptyData() : loadState();
 let activeView = "dashboard";
 let selectedPeriod = currentPeriod;
+let contractFilter = "all";
 let horizon = 6;
 let toastTimer;
 let authSession = null;
@@ -73,7 +77,7 @@ function loadState() {
   if (!data || !Array.isArray(data.properties) || !Array.isArray(data.contracts) || !Array.isArray(data.charges)) {
     throw new Error("Os dados guardados da CasaThomaz não têm um formato válido.");
   }
-  return data;
+  return normalizeData(data);
 }
 
 function saveState(message) {
@@ -133,7 +137,7 @@ function readAccountCache(userId) {
     if (!saved?.data || !Array.isArray(saved.data.properties) || !Array.isArray(saved.data.contracts) || !Array.isArray(saved.data.charges)) {
       return null;
     }
-    return { data: saved.data, pending: Boolean(saved.pending) };
+    return { data: normalizeData(saved.data), pending: Boolean(saved.pending) };
   } catch {
     return null;
   }
@@ -263,7 +267,7 @@ function parseData(raw, description) {
   if (!data || !Array.isArray(data.properties) || !Array.isArray(data.contracts) || !Array.isArray(data.charges)) {
     throw new Error(`${description} não têm um formato válido. Os dados originais foram preservados.`);
   }
-  return data;
+  return normalizeData(data);
 }
 
 function readLegacyData() {
@@ -787,20 +791,34 @@ function renderProperties() {
 }
 
 function renderContracts() {
-  const contracts = [...state.contracts].sort((a, b) => a.endDate.localeCompare(b.endDate));
+  const allContracts = [...state.contracts].sort((a, b) => (a.endDate || "").localeCompare(b.endDate || ""));
+  const contracts = allContracts.filter((contract) => (
+    contractFilter === "all"
+    || (contractFilter === "archived" ? contract.status === "archived" : contract.status !== "archived")
+  ));
+  const activeCount = state.contracts.filter((contract) => (
+    contract.status === "active"
+    && contract.startDate <= today
+    && (!contract.endDate || contract.endDate >= today)
+  )).length;
   return `
     <section class="page-heading">
       <div><p class="eyebrow">ARRENDAMENTOS</p><h1>Contratos</h1><p class="heading-subtitle">Arrendatários, rendas e datas importantes num só lugar.</p></div>
       <button class="button button-primary" type="button" data-action="new-contract"><span aria-hidden="true">＋</span> Novo contrato</button>
     </section>
-    ${contracts.length ? `<section class="panel table-panel">
-      <div class="table-toolbar"><div><strong>${contracts.length} ${contracts.length === 1 ? "contrato" : "contratos"}</strong><span>Inclui contratos ativos e anteriores</span></div><span class="table-toolbar-total">${state.contracts.filter((c) => c.status === "active").length} ativos</span></div>
+    ${allContracts.length ? `<section class="panel table-panel">
+      <div class="table-toolbar"><div><strong>${contracts.length} ${contracts.length === 1 ? "contrato" : "contratos"}</strong><span>Os contratos arquivados mantêm o histórico de rendas e pagamentos.</span></div><div class="contract-toolbar-actions"><label class="contract-filter"><span>Mostrar</span><select data-contract-filter><option value="all" ${contractFilter === "all" ? "selected" : ""}>Todos</option><option value="active" ${contractFilter === "active" ? "selected" : ""}>Não arquivados</option><option value="archived" ${contractFilter === "archived" ? "selected" : ""}>Arquivados</option></select></label><span class="table-toolbar-total">${activeCount} ativos</span></div></div>
       <div class="table-scroll"><table><thead><tr><th>Imóvel / arrendatário</th><th>Renda mensal</th><th>Início</th><th>Fim</th><th>Próxima atualização</th><th>Estado</th><th><span class="sr-only">Ações</span></th></tr></thead><tbody>
-      ${contracts.map((contract) => {
+      ${contracts.length ? contracts.map((contract) => {
         const property = state.properties.find((item) => item.id === contract.propertyId);
         const isActive = contract.status === "active" && contract.startDate <= today && (!contract.endDate || contract.endDate >= today);
-        return `<tr><td><strong>${escapeHtml(property?.name || "Imóvel removido")}</strong><span>${escapeHtml(contract.tenantName)}</span></td><td><strong>${money.format(contract.monthlyRent)}</strong></td><td>${formatDate(contract.startDate)}</td><td>${formatDate(contract.endDate)}</td><td>${formatDate(contract.adjustmentDate)}</td><td><span class="status-badge ${isActive ? "status-paid" : "status-neutral"}">${isActive ? "Ativo" : "Terminado"}</span></td><td><button class="icon-button table-edit" type="button" aria-label="Editar contrato de ${escapeHtml(contract.tenantName)}" data-action="edit-contract" data-id="${escapeHtml(contract.id)}">↗</button></td></tr>`;
-      }).join("")}
+        const status = contract.status === "archived" ? "Arquivado" : isActive ? "Ativo" : "Terminado";
+        const statusClassName = isActive ? "status-paid" : "status-neutral";
+        const archiveAction = contract.status === "archived"
+          ? `<button class="text-button" type="button" data-action="restore-contract" data-id="${escapeHtml(contract.id)}">Restaurar</button>`
+          : `<button class="text-button" type="button" data-action="archive-contract" data-id="${escapeHtml(contract.id)}">Arquivar</button>`;
+        return `<tr><td><strong>${escapeHtml(property?.name || "Imóvel removido")}</strong><span>${escapeHtml(contract.tenantName)}</span></td><td><strong>${money.format(contract.monthlyRent)}</strong></td><td>${formatDate(contract.startDate)}</td><td>${formatDate(contract.endDate)}</td><td>${formatDate(contract.adjustmentDate)}</td><td><span class="status-badge ${statusClassName}">${status}</span></td><td><div class="contract-actions"><button class="icon-button table-edit" type="button" aria-label="Editar contrato de ${escapeHtml(contract.tenantName)}" data-action="edit-contract" data-id="${escapeHtml(contract.id)}">↗</button>${archiveAction}</div></td></tr>`;
+      }).join("") : `<tr><td class="contract-filter-empty" colspan="7">Não há contratos ${contractFilter === "archived" ? "arquivados" : "não arquivados"}.</td></tr>`}
       </tbody></table></div>
     </section>` : `<section class="empty-state page-empty"><span class="empty-icon">▤</span><h2>Ainda sem contratos</h2><p>Associe um contrato a um imóvel para acompanhar rendas e datas de atualização.</p><button class="button button-primary" type="button" data-action="new-contract">Criar contrato</button></section>`}`;
 }
@@ -932,10 +950,22 @@ function openContractForm(contract, preferredPropertyId) {
         <label class="form-field">Fim do contrato<input name="endDate" type="date" value="${escapeHtml(contract?.endDate || "")}"></label>
         <label class="form-field">Próxima atualização anual<input name="adjustmentDate" type="date" value="${escapeHtml(contract?.adjustmentDate || "")}"><small>O lembrete será agendado dois meses antes.</small></label>
         <label class="form-field">Dia de vencimento da renda<input name="paymentDueDay" type="number" required min="1" max="31" value="${escapeHtml(contract?.paymentDueDay ?? 8)}"></label>
-        <label class="form-field">Estado<select name="status"><option value="active" ${contract?.status !== "ended" ? "selected" : ""}>Ativo</option><option value="ended" ${contract?.status === "ended" ? "selected" : ""}>Terminado</option></select></label>
+        ${contract?.status === "archived"
+          ? '<div class="form-field"><span>Estado</span><span class="status-badge status-neutral">Arquivado</span></div>'
+          : `<label class="form-field">Estado<select name="status"><option value="active" ${contract?.status !== "ended" ? "selected" : ""}>Ativo</option><option value="ended" ${contract?.status === "ended" ? "selected" : ""}>Terminado</option></select></label>`}
       </div>
       <div class="dialog-actions"><button class="button button-secondary" type="button" data-action="close-dialog">Cancelar</button><button class="button button-primary" type="submit">${editing ? "Guardar alterações" : "Adicionar contrato"}</button></div>
     </form>`);
+}
+
+function openArchiveConfirmation(contract) {
+  const property = state.properties.find((item) => item.id === contract.propertyId);
+  showDialog(`
+    <div>
+      <div class="dialog-heading"><div><p class="eyebrow">ENCERRAR REGISTO</p><h2 id="dialog-title">Arquivar contrato?</h2></div><button class="dialog-close" type="button" data-action="close-dialog" aria-label="Fechar">×</button></div>
+      <p class="notice-modal-intro">O contrato de ${escapeHtml(contract.tenantName)}${property ? `, no imóvel ${escapeHtml(property.name)}` : ""}, deixará de gerar novas cobranças e lembretes. O contrato e todos os registos de rendas e pagamentos existentes serão mantidos e continuarão consultáveis. Pode restaurá-lo mais tarde.</p>
+      <div class="dialog-actions"><button class="button button-secondary" type="button" data-action="close-dialog">Cancelar</button><button class="button button-danger" type="button" data-action="confirm-archive" data-contract-id="${escapeHtml(contract.id)}">Arquivar contrato</button></div>
+    </div>`);
 }
 
 function openPaymentForm(charge) {
@@ -1038,6 +1068,31 @@ document.addEventListener("click", async (event) => {
   if (action === "edit-property") openPropertyForm(state.properties.find((property) => property.id === id));
   if (action === "new-contract") openContractForm(null, propertyId);
   if (action === "edit-contract") openContractForm(state.contracts.find((contract) => contract.id === id));
+  if (action === "archive-contract") {
+    const contract = state.contracts.find((item) => item.id === id);
+    if (contract && contract.status !== "archived") openArchiveConfirmation(contract);
+    return;
+  }
+  if (action === "confirm-archive") {
+    const contract = state.contracts.find((item) => item.id === contractId);
+    if (contract && contract.status !== "archived") {
+      Object.assign(contract, archiveContract(contract, today));
+      saveState("Contrato arquivado. O histórico de rendas foi mantido.");
+    }
+    closeDialog();
+    render();
+    return;
+  }
+  if (action === "restore-contract") {
+    const contract = state.contracts.find((item) => item.id === id);
+    if (contract?.status === "archived") {
+      Object.assign(contract, restoreContract(contract));
+      ensureCharges(selectedPeriod);
+      saveState("Contrato restaurado; o histórico de rendas foi mantido.");
+      render();
+    }
+    return;
+  }
   if (action === "register-payment") {
     ensureCharges(selectedPeriod);
     openPaymentForm(state.charges.find((charge) => charge.id === id));
@@ -1070,6 +1125,10 @@ document.addEventListener("change", (event) => {
   if (event.target.matches("[data-period]")) {
     selectedPeriod = event.target.value || currentPeriod;
     ensureCharges(selectedPeriod);
+    render();
+  }
+  if (event.target.matches("[data-contract-filter]")) {
+    contractFilter = event.target.value;
     render();
   }
 });
@@ -1158,7 +1217,9 @@ document.addEventListener("submit", async (event) => {
       endDate: values.endDate,
       adjustmentDate: values.adjustmentDate,
       paymentDueDay: Number(values.paymentDueDay),
-      status: values.status,
+      status: existing?.status === "archived" ? "archived" : values.status,
+      statusBeforeArchive: existing?.statusBeforeArchive ?? null,
+      archivedAt: existing?.archivedAt ?? null,
       noticeSent: existing?.adjustmentDate === values.adjustmentDate
         ? existing.noticeSent
         : false,

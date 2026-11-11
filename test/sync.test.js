@@ -4,6 +4,7 @@ import {
   emptyData,
   hasRecords,
   mergeSnapshots,
+  normalizeData,
 } from "../sync.js";
 
 test("a new account starts with an empty portfolio", () => {
@@ -49,4 +50,23 @@ test("conflicting local records are preserved as copies with linked contracts an
   assert.ok(localCharge);
   assert.equal(localCharge.contractId, localContract.id);
   assert.notEqual(localCharge.id, "charge-1");
+});
+
+test("legacy contracts receive default archive fields without changing existing records", () => {
+  const legacy = {
+    properties: [{ id: "p-1", name: "Casa" }],
+    contracts: [{ id: "c-1", propertyId: "p-1" }],
+    charges: [{ id: "charge-1", contractId: "c-1", payments: [{ amount: 500 }] }],
+  };
+  const normalized = normalizeData(legacy);
+
+  assert.deepEqual(normalized.contracts[0], {
+    id: "c-1",
+    propertyId: "p-1",
+    status: "active",
+    statusBeforeArchive: null,
+    archivedAt: null,
+  });
+  assert.deepEqual(normalized.charges, legacy.charges);
+  assert.deepEqual(normalized.properties, legacy.properties);
 });
