@@ -2,6 +2,10 @@
 
 Aplicação web/PWA para gerir imóveis, contratos, cobranças e datas relevantes. Pode funcionar localmente como demonstração ou sincronizar uma carteira privada com Supabase.
 
+## Arquivar contratos
+
+Em **Contratos**, use **Arquivar** na linha do contrato e confirme a ação. O contrato deixa de contar como ativo e deixa de gerar novas cobranças e lembretes; o contrato e as cobranças/pagamentos já registados não são apagados. Consulte-os em **Rendas e pagamentos**, escolhendo o período correspondente. O filtro **Mostrar → Arquivados** permite localizar contratos arquivados; use **Restaurar** para reativar um contrato arquivado por engano sem recriar o histórico existente. Os dados locais e sincronizados recebem automaticamente os valores por omissão dos novos campos de arquivo.
+
 ## Demonstração local
 
 Sirva a pasta num servidor HTTP local, por exemplo com `npx serve .`, e abra o URL no navegador. A primeira execução sem Supabase cria cinco imóveis e quatro contratos de demonstração. Sem configurar um projeto, os dados ficam apenas no `localStorage` desse navegador e não são sincronizados.

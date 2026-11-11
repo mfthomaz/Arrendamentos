@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  archiveContract,
   addMonths,
   createCharges,
   getChargeStatus,
   getChargeSummary,
   getUpcomingEvents,
+  restoreContract,
 } from "../domain.js";
 
 test("addMonths clamps the day to the last day of the destination month", () => {
@@ -72,4 +74,53 @@ test("sent notices remain visible as completed and events respect the selected h
   const events = getUpcomingEvents(contracts, "2027-02-01", 3, { a: true });
   assert.equal(events.some((event) => event.date === "2027-10-01"), false);
   assert.equal(events.find((event) => event.type === "notice").completed, true);
+});
+
+test("archiving preserves contract and payment history while stopping future charges and events", () => {
+  const contract = {
+    id: "c-1",
+    status: "active",
+    propertyId: "p-1",
+    tenantName: "Ana",
+    startDate: "2026-01-01",
+    endDate: "2027-12-31",
+    adjustmentDate: "2027-04-01",
+    monthlyRent: 1000,
+    paymentDueDay: 5,
+  };
+  const historicCharge = {
+    id: "charge-1",
+    contractId: "c-1",
+    period: "2027-02",
+    amount: 1000,
+    dueDate: "2027-02-05",
+    payments: [{ amount: 600, date: "2027-02-04" }],
+  };
+  const archived = archiveContract(contract, "2027-02-10");
+  const charges = createCharges([archived], [historicCharge], "2027-03");
+
+  assert.equal(archived.status, "archived");
+  assert.equal(archived.archivedAt, "2027-02-10");
+  assert.equal(archived.monthlyRent, contract.monthlyRent);
+  assert.deepEqual(charges, [historicCharge]);
+  assert.equal(getChargeSummary([archived], charges, "2027-02", "2027-02-10").activeContracts, 0);
+  assert.deepEqual(getUpcomingEvents([archived], "2027-02-10", 6), []);
+});
+
+test("restoring an archived ended contract keeps its original status and clears archive metadata", () => {
+  const archived = archiveContract({
+    id: "c-ended",
+    status: "ended",
+    statusBeforeArchive: null,
+    archivedAt: null,
+    tenantName: "Rui",
+  }, "2027-02-10");
+
+  assert.deepEqual(restoreContract(archived), {
+    id: "c-ended",
+    status: "ended",
+    statusBeforeArchive: null,
+    archivedAt: null,
+    tenantName: "Rui",
+  });
 });

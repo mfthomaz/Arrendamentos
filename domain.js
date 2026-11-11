@@ -56,6 +56,26 @@ export function getChargeStatus(charge, today = toISODate(new Date())) {
   return "pending";
 }
 
+export function archiveContract(contract, archivedAt) {
+  return {
+    ...contract,
+    status: "archived",
+    statusBeforeArchive: contract.status === "archived"
+      ? contract.statusBeforeArchive || "active"
+      : contract.status,
+    archivedAt,
+  };
+}
+
+export function restoreContract(contract) {
+  return {
+    ...contract,
+    status: contract.statusBeforeArchive || "active",
+    statusBeforeArchive: null,
+    archivedAt: null,
+  };
+}
+
 export function createCharges(contracts, charges, period) {
   const { start, end, days } = periodBounds(period);
   const byContract = new Map(

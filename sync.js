@@ -2,6 +2,17 @@ export function emptyData() {
   return { properties: [], contracts: [], charges: [] };
 }
 
+export function normalizeData(data) {
+  const normalized = { ...emptyData(), ...(data || {}) };
+  normalized.contracts = normalized.contracts.map((contract) => ({
+    ...contract,
+    status: contract.status || "active",
+    statusBeforeArchive: contract.statusBeforeArchive ?? null,
+    archivedAt: contract.archivedAt ?? null,
+  }));
+  return normalized;
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -49,8 +60,8 @@ function mergeRecords(remoteRecords, localRecords, relationshipMap = {}, relatio
 }
 
 export function mergeSnapshots(remoteData, localData) {
-  const remote = { ...emptyData(), ...(remoteData || {}) };
-  const local = { ...emptyData(), ...(localData || {}) };
+  const remote = normalizeData(remoteData);
+  const local = normalizeData(localData);
   const properties = mergeRecords(remote.properties, local.properties);
   const contracts = mergeRecords(remote.contracts, local.contracts, properties.idMap, "propertyId");
   const charges = mergeRecords(remote.charges, local.charges, contracts.idMap, "contractId");
