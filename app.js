@@ -902,12 +902,28 @@ function render() {
 
 function showDialog(content) {
   dialogContent.innerHTML = content;
+  const form = dialogContent.querySelector("form");
+  if (form) {
+    form.dataset.initialValues = JSON.stringify(Object.fromEntries(new FormData(form).entries()));
+  }
   dialog.showModal();
   dialog.querySelector("input, select, textarea, button")?.focus();
 }
 
-function closeDialog() {
-  if (dialog.open) dialog.close();
+function hasUnsavedFormChanges() {
+  const form = dialogContent.querySelector("form");
+  if (!form || !form.dataset.initialValues) return false;
+  return JSON.stringify(Object.fromEntries(new FormData(form).entries())) !== form.dataset.initialValues;
+}
+
+function closeDialog(saved = false) {
+  if (!dialog.open) return true;
+  if (!saved && hasUnsavedFormChanges()
+    && !window.confirm("Existem alterações por guardar. Quer descartá-las?")) {
+    return false;
+  }
+  dialog.close();
+  return true;
 }
 
 function openPropertyForm(property) {
@@ -998,8 +1014,8 @@ function openNotice(contract) {
 
 function setView(view) {
   if (!renderers[view]) return;
+  if (!closeDialog()) return;
   activeView = view;
-  closeDialog();
   render();
   document.querySelector("#main-content").focus({ preventScroll: true });
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1079,7 +1095,7 @@ document.addEventListener("click", async (event) => {
       Object.assign(contract, archiveContract(contract, today));
       saveState("Contrato arquivado. O histórico de rendas foi mantido.");
     }
-    closeDialog();
+    closeDialog(true);
     render();
     return;
   }
@@ -1195,7 +1211,7 @@ document.addEventListener("submit", async (event) => {
     if (index >= 0) state.properties[index] = property;
     else state.properties.push(property);
     saveState(index >= 0 ? "Imóvel atualizado." : "Imóvel adicionado.");
-    closeDialog();
+    closeDialog(true);
     render();
     return;
   }
@@ -1228,7 +1244,7 @@ document.addEventListener("submit", async (event) => {
     else state.contracts.push(contract);
     ensureCharges(selectedPeriod);
     saveState(existing ? "Contrato atualizado." : "Contrato adicionado.");
-    closeDialog();
+    closeDialog(true);
     render();
     return;
   }
@@ -1245,13 +1261,18 @@ document.addEventListener("submit", async (event) => {
     charge.payments ||= [];
     charge.payments.push({ amount, date: values.date });
     saveState("Pagamento registado.");
-    closeDialog();
+    closeDialog(true);
     render();
   }
 });
 
 dialog.addEventListener("click", (event) => {
   if (event.target === dialog) closeDialog();
+});
+
+dialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeDialog();
 });
 
 dialog.addEventListener("close", () => {
