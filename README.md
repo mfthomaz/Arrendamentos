@@ -8,7 +8,7 @@ Em **Contratos**, use **Arquivar** na linha do contrato e confirme a ação. O c
 
 ## Arrendamentos não habitacionais
 
-Ao criar ou editar um contrato, indique a finalidade **Não habitacional / empresa** para lojas ou outros arrendamentos não habitacionais, e registe a renda bruta acordada. A aplicação calcula uma retenção fixa de 25% e apresenta o valor líquido (75%) a receber. As cobranças, saldos em falta e validação dos pagamentos usam o valor líquido; a renda bruta e a retenção também ficam visíveis no contrato e na cobrança. Ao alterar a finalidade, as cobranças existentes desse contrato são recalculadas sem alterar a renda bruta nem os pagamentos já registados. Contratos existentes mantêm-se habitacionais até serem atualizados. A aplicação não submete declarações nem pagamentos fiscais.
+Ao criar ou editar um contrato, indique a finalidade **Não habitacional / empresa** para arrendamentos não habitacionais e registe a renda bruta acordada. Imóveis classificados como **Loja** ou **Escritório** aplicam automaticamente esta finalidade. A aplicação calcula uma retenção fixa de 25% e apresenta o valor líquido (75%) a receber. As cobranças, saldos em falta e validação dos pagamentos usam o valor líquido; a renda bruta e a retenção também ficam visíveis no contrato e na cobrança. Ao alterar a finalidade ou classificar um imóvel como loja/escritório, as cobranças existentes são recalculadas sem alterar a renda bruta nem os pagamentos já registados. Contratos existentes noutros tipos de imóvel mantêm-se habitacionais até serem atualizados. A aplicação não submete declarações nem pagamentos fiscais.
 
 ## Demonstração local
 

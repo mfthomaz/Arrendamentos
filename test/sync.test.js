@@ -6,6 +6,7 @@ import {
   mergeSnapshots,
   normalizeData,
 } from "../sync.js";
+import { getChargeSummary } from "../domain.js";
 
 test("a new account starts with an empty portfolio", () => {
   assert.deepEqual(emptyData(), { properties: [], contracts: [], charges: [] });
@@ -70,4 +71,33 @@ test("legacy contracts receive default archive fields without changing existing 
   });
   assert.deepEqual(normalized.charges, legacy.charges);
   assert.deepEqual(normalized.properties, legacy.properties);
+});
+
+test("shop and office properties apply withholding to existing gross charges and preserve payments", () => {
+  const legacy = {
+    properties: [
+      { id: "p-shop", type: "Loja" },
+      { id: "p-office", type: "Escritório" },
+    ],
+    contracts: [
+      { id: "c-shop", propertyId: "p-shop", status: "active", monthlyRent: 1200 },
+      { id: "c-office", propertyId: "p-office", status: "active", monthlyRent: 800 },
+    ],
+    charges: [
+      { id: "charge-shop", contractId: "c-shop", period: "2027-02", amount: 1200, dueDate: "2027-02-05", payments: [{ amount: 300 }] },
+      { id: "charge-office", contractId: "c-office", period: "2027-02", amount: 800, dueDate: "2027-02-05", payments: [] },
+    ],
+  };
+  const normalized = normalizeData(legacy);
+  const summary = getChargeSummary(normalized.contracts, normalized.charges, "2027-02", "2027-02-10");
+
+  assert.deepEqual(normalized.contracts.map((contract) => contract.nonResidential), [true, true]);
+  assert.deepEqual(normalized.charges.map((charge) => [charge.amount, charge.withholdingAmount, charge.netAmount]), [
+    [1200, 300, 900],
+    [800, 200, 600],
+  ]);
+  assert.equal(summary.total, 1500);
+  assert.equal(summary.received, 300);
+  assert.equal(summary.missing, 1200);
+  assert.deepEqual(normalized.charges[0].payments, legacy.charges[0].payments);
 });

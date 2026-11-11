@@ -9,6 +9,7 @@ import {
   getChargeWithholding,
   getPaidAmount,
   getUpcomingEvents,
+  isNonResidentialProperty,
   restoreContract,
   toISODate,
   updateChargeWithholding,
@@ -967,7 +968,10 @@ function openContractForm(contract, preferredPropertyId) {
     return;
   }
   const editing = Boolean(contract);
-  const propertyOptions = state.properties.map((property) => `<option value="${escapeHtml(property.id)}" ${contract?.propertyId === property.id || preferredPropertyId === property.id ? "selected" : ""}>${escapeHtml(property.name)}</option>`).join("");
+  const selectedPropertyId = contract?.propertyId || preferredPropertyId || state.properties[0].id;
+  const selectedProperty = state.properties.find((property) => property.id === selectedPropertyId);
+  const nonResidential = Boolean(contract?.nonResidential || isNonResidentialProperty(selectedProperty));
+  const propertyOptions = state.properties.map((property) => `<option value="${escapeHtml(property.id)}" ${selectedPropertyId === property.id ? "selected" : ""}>${escapeHtml(property.name)}</option>`).join("");
   showDialog(`
     <form id="contract-form" data-id="${editing ? escapeHtml(contract.id) : ""}">
       <div class="dialog-heading"><div><p class="eyebrow">${editing ? "ATUALIZAR REGISTO" : "NOVO ARRENDAMENTO"}</p><h2 id="dialog-title">${editing ? "Editar contrato" : "Adicionar contrato"}</h2></div><button class="dialog-close" type="button" data-action="close-dialog" aria-label="Fechar">×</button></div>
@@ -975,7 +979,7 @@ function openContractForm(contract, preferredPropertyId) {
         <label class="form-field form-field-wide">Imóvel<select name="propertyId" required>${propertyOptions}</select></label>
         <label class="form-field">Nome do arrendatário / empresa<input name="tenantName" required maxlength="100" value="${escapeHtml(contract?.tenantName || "")}"></label>
         <label class="form-field">Email do arrendatário<input name="tenantEmail" type="email" maxlength="160" value="${escapeHtml(contract?.tenantEmail || "")}" placeholder="Opcional"></label>
-        <label class="form-field">Finalidade<select name="nonResidential"><option value="false" ${!contract?.nonResidential ? "selected" : ""}>Habitacional</option><option value="true" ${contract?.nonResidential ? "selected" : ""}>Não habitacional / empresa</option></select><small>Para contratos não habitacionais, calcula uma retenção de 25% e o líquido a receber.</small></label>
+        <label class="form-field">Finalidade<select name="nonResidential"><option value="false" ${!nonResidential ? "selected" : ""}>Habitacional</option><option value="true" ${nonResidential ? "selected" : ""}>Não habitacional / empresa</option></select><small>Lojas e escritórios aplicam automaticamente a retenção de 25% e o líquido a receber.</small></label>
         <label class="form-field">Renda bruta mensal (€)<input name="monthlyRent" type="number" required min="0.01" step="0.01" value="${escapeHtml(contract?.monthlyRent ?? "")}"></label>
         <label class="form-field">Caução (€)<input name="deposit" type="number" min="0" step="0.01" value="${escapeHtml(contract?.deposit ?? 0)}"></label>
         <label class="form-field">Início do contrato<input name="startDate" type="date" required value="${escapeHtml(contract?.startDate || today)}"></label>
@@ -1228,6 +1232,7 @@ document.addEventListener("submit", async (event) => {
     const index = state.properties.findIndex((item) => item.id === property.id);
     if (index >= 0) state.properties[index] = property;
     else state.properties.push(property);
+    state = normalizeData(state);
     saveState(index >= 0 ? "Imóvel atualizado." : "Imóvel adicionado.");
     closeDialog(true);
     render();
@@ -1240,7 +1245,9 @@ document.addEventListener("submit", async (event) => {
       return;
     }
     const existing = state.contracts.find((item) => item.id === form.dataset.id);
-    const nonResidentialChanged = Boolean(existing && existing.nonResidential !== (values.nonResidential === "true"));
+    const selectedProperty = state.properties.find((property) => property.id === values.propertyId);
+    const nonResidential = values.nonResidential === "true" || isNonResidentialProperty(selectedProperty);
+    const nonResidentialChanged = Boolean(existing && existing.nonResidential !== nonResidential);
     const contract = {
       id: existing?.id || `c-${crypto.randomUUID()}`,
       propertyId: values.propertyId,
@@ -1255,7 +1262,7 @@ document.addEventListener("submit", async (event) => {
       status: existing?.status === "archived" ? "archived" : values.status,
       statusBeforeArchive: existing?.statusBeforeArchive ?? null,
       archivedAt: existing?.archivedAt ?? null,
-      nonResidential: values.nonResidential === "true",
+      nonResidential,
       noticeSent: existing?.adjustmentDate === values.adjustmentDate
         ? existing.noticeSent
         : false,
