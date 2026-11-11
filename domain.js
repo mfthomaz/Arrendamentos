@@ -48,9 +48,33 @@ export function getPaidAmount(charge) {
   return (charge.payments || []).reduce((total, payment) => total + Number(payment.amount || 0), 0);
 }
 
-export function getChargeStatus(charge, today = toISODate(new Date())) {
+export function getChargeNetAmount(charge, contract) {
+  if (charge.netAmount != null) return Number(charge.netAmount);
+  const grossAmount = Number(charge.amount || 0);
+  const withholdingRate = charge.withholdingRate ?? (contract?.nonResidential ? 0.25 : 0);
+  const withholdingAmount = Math.round((grossAmount * Number(withholdingRate) + Number.EPSILON) * 100) / 100;
+  return grossAmount - withholdingAmount;
+}
+
+export function getChargeWithholding(charge, contract) {
+  return Number(charge.amount || 0) - getChargeNetAmount(charge, contract);
+}
+
+export function updateChargeWithholding(charge, contract) {
+  const amount = Number(charge.amount || 0);
+  const withholdingRate = contract.nonResidential ? 0.25 : 0;
+  const withholdingAmount = Math.round((amount * withholdingRate + Number.EPSILON) * 100) / 100;
+  return {
+    ...charge,
+    withholdingRate,
+    withholdingAmount,
+    netAmount: amount - withholdingAmount,
+  };
+}
+
+export function getChargeStatus(charge, today = toISODate(new Date()), contract) {
   const paid = getPaidAmount(charge);
-  if (paid >= charge.amount) return "paid";
+  if (paid >= getChargeNetAmount(charge, contract)) return "paid";
   if (paid > 0) return charge.dueDate < today ? "partial-overdue" : "partial";
   if (charge.dueDate < today) return "overdue";
   return "pending";
@@ -89,14 +113,15 @@ export function createCharges(contracts, charges, period) {
     }
     if (byContract.has(contract.id)) continue;
     const dueDay = Math.min(Number(contract.paymentDueDay) || 1, days);
-    result.push({
+    const charge = {
       id: `${contract.id}-${period}`,
       contractId: contract.id,
       period,
       amount: Number(contract.monthlyRent),
       dueDate: `${period}-${String(dueDay).padStart(2, "0")}`,
       payments: [],
-    });
+    };
+    result.push(updateChargeWithholding(charge, contract));
   }
   return result;
 }
@@ -113,11 +138,14 @@ export function getChargeSummary(contracts, charges, period, today = toISODate(n
     chargeCount: monthCharges.length,
   };
 
+  const contractsById = new Map(contracts.map((contract) => [contract.id, contract]));
   for (const charge of monthCharges) {
     const paid = getPaidAmount(charge);
-    const outstanding = Math.max(0, Number(charge.amount) - paid);
-    const status = getChargeStatus(charge, today);
-    summary.total += Number(charge.amount);
+    const contract = contractsById.get(charge.contractId);
+    const netAmount = getChargeNetAmount(charge, contract);
+    const outstanding = Math.max(0, netAmount - paid);
+    const status = getChargeStatus(charge, today, contract);
+    summary.total += netAmount;
     summary.received += paid;
     summary.missing += outstanding;
     if (status === "overdue" || status === "partial-overdue") {
@@ -126,7 +154,7 @@ export function getChargeSummary(contracts, charges, period, today = toISODate(n
     }
     if (status === "paid") summary.paidCount += 1;
   }
-  summary.collectionRate = summary.total ? summary.received / summary.total : 0;
+  summary.collectionRate = summary.total ? Math.min(1, summary.received / summary.total) : 0;
   summary.activeContracts = contracts.filter((contract) => (
     contract.status === "active"
     && contract.startDate <= today

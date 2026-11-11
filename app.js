@@ -3,12 +3,15 @@ import {
   addMonths,
   createCharges,
   createDemoData,
+  getChargeNetAmount,
   getChargeStatus,
   getChargeSummary,
+  getChargeWithholding,
   getPaidAmount,
   getUpcomingEvents,
   restoreContract,
   toISODate,
+  updateChargeWithholding,
 } from "./domain.js";
 import {
   createSupabaseClient,
@@ -39,6 +42,7 @@ let state = supabase ? emptyData() : loadState();
 let activeView = "dashboard";
 let selectedPeriod = currentPeriod;
 let contractFilter = "all";
+let approvedDialogClosures = 0;
 let horizon = 6;
 let toastTimer;
 let authSession = null;
@@ -658,7 +662,10 @@ function renderDashboard() {
   const events = getUpcomingEvents(state.contracts, today, horizon);
   const upcoming = events.slice(0, 4);
   const uncollected = state.charges
-    .filter((charge) => charge.period === currentPeriod && getChargeStatus(charge, today) !== "paid")
+    .filter((charge) => {
+      const contract = state.contracts.find((item) => item.id === charge.contractId);
+      return charge.period === currentPeriod && getChargeStatus(charge, today, contract) !== "paid";
+    })
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
     .slice(0, 4);
   const percent = Math.round(summary.collectionRate * 100);
@@ -753,8 +760,8 @@ function renderDashboard() {
           ${uncollected.map((charge) => {
             const contract = state.contracts.find((item) => item.id === charge.contractId);
             const property = propertyForContract(charge.contractId);
-            const status = getChargeStatus(charge, today);
-            return `<div class="attention-row"><div class="attention-avatar" aria-hidden="true">${escapeHtml((contract?.tenantName || "?").split(" ").map((part) => part[0]).slice(0, 2).join(""))}</div><div class="attention-copy"><strong>${escapeHtml(contract?.tenantName || "Arrendatário")}</strong><span>${escapeHtml(property?.name || "Imóvel")} · vence ${formatDate(charge.dueDate)}</span></div><div class="attention-amount"><strong>${money.format(Math.max(0, charge.amount - getPaidAmount(charge)))}</strong><span class="status-badge ${statusClass(status)}">${statusLabel(status)}</span></div></div>`;
+            const status = getChargeStatus(charge, today, contract);
+            return `<div class="attention-row"><div class="attention-avatar" aria-hidden="true">${escapeHtml((contract?.tenantName || "?").split(" ").map((part) => part[0]).slice(0, 2).join(""))}</div><div class="attention-copy"><strong>${escapeHtml(contract?.tenantName || "Arrendatário")}</strong><span>${escapeHtml(property?.name || "Imóvel")} · vence ${formatDate(charge.dueDate)}</span></div><div class="attention-amount"><strong>${money.format(Math.max(0, getChargeNetAmount(charge, contract) - getPaidAmount(charge)))}</strong><span class="status-badge ${statusClass(status)}">${statusLabel(status)}</span></div></div>`;
           }).join("") || '<div class="empty-state empty-state-small"><span class="empty-icon">✓</span><strong>Tudo em dia</strong><p>Não há valores em falta neste mês.</p></div>'}
         </div>
         <button class="panel-link" type="button" data-view="payments">Acompanhar pagamentos <span aria-hidden="true">→</span></button>
@@ -782,7 +789,7 @@ function renderProperties() {
           </div>
           <div class="property-card-body">
             <div class="property-card-title"><div><h2>${escapeHtml(property.name)}</h2><p>${escapeHtml(property.address)}</p></div><span class="mini-status ${contract ? "mini-status-rented" : "mini-status-vacant"}">${contract ? "Arrendado" : "Disponível"}</span></div>
-            <div class="property-details"><span>${property.area ? `${escapeHtml(property.area)} m²` : "Área não indicada"}</span>${contract ? `<span>Arrendatário · ${escapeHtml(contract.tenantName)}</span><strong>${money.format(contract.monthlyRent)}<small> / mês</small></strong>${nextAdjustment}` : '<span>Sem contrato ativo</span>'}</div>
+            <div class="property-details"><span>${property.area ? `${escapeHtml(property.area)} m²` : "Área não indicada"}</span>${contract ? `<span>Arrendatário / empresa · ${escapeHtml(contract.tenantName)}</span><strong>${money.format(contract.monthlyRent)}<small> brutos / mês</small></strong>${contract.nonResidential ? `<span>Retenção (25%) · ${money.format(contract.monthlyRent * 0.25)} · líquido ${money.format(contract.monthlyRent * 0.75)}</span>` : ""}${nextAdjustment}` : '<span>Sem contrato ativo</span>'}</div>
             <div class="property-card-actions"><button class="button button-secondary button-small" type="button" data-action="edit-property" data-id="${escapeHtml(property.id)}">Editar imóvel</button>${contract ? `<button class="text-button" type="button" data-action="edit-contract" data-id="${escapeHtml(contract.id)}">Ver contrato</button>` : `<button class="text-button" type="button" data-action="new-contract" data-property-id="${escapeHtml(property.id)}">Adicionar contrato <span aria-hidden="true">→</span></button>`}</div>
           </div>
         </article>`;
@@ -808,7 +815,7 @@ function renderContracts() {
     </section>
     ${allContracts.length ? `<section class="panel table-panel">
       <div class="table-toolbar"><div><strong>${contracts.length} ${contracts.length === 1 ? "contrato" : "contratos"}</strong><span>Os contratos arquivados mantêm o histórico de rendas e pagamentos.</span></div><div class="contract-toolbar-actions"><label class="contract-filter"><span>Mostrar</span><select data-contract-filter><option value="all" ${contractFilter === "all" ? "selected" : ""}>Todos</option><option value="active" ${contractFilter === "active" ? "selected" : ""}>Não arquivados</option><option value="archived" ${contractFilter === "archived" ? "selected" : ""}>Arquivados</option></select></label><span class="table-toolbar-total">${activeCount} ativos</span></div></div>
-      <div class="table-scroll"><table><thead><tr><th>Imóvel / arrendatário</th><th>Renda mensal</th><th>Início</th><th>Fim</th><th>Próxima atualização</th><th>Estado</th><th><span class="sr-only">Ações</span></th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr><th>Imóvel / arrendatário</th><th>Renda bruta / líquida</th><th>Início</th><th>Fim</th><th>Próxima atualização</th><th>Estado</th><th><span class="sr-only">Ações</span></th></tr></thead><tbody>
       ${contracts.length ? contracts.map((contract) => {
         const property = state.properties.find((item) => item.id === contract.propertyId);
         const isActive = contract.status === "active" && contract.startDate <= today && (!contract.endDate || contract.endDate >= today);
@@ -817,7 +824,8 @@ function renderContracts() {
         const archiveAction = contract.status === "archived"
           ? `<button class="text-button" type="button" data-action="restore-contract" data-id="${escapeHtml(contract.id)}">Restaurar</button>`
           : `<button class="text-button" type="button" data-action="archive-contract" data-id="${escapeHtml(contract.id)}">Arquivar</button>`;
-        return `<tr><td><strong>${escapeHtml(property?.name || "Imóvel removido")}</strong><span>${escapeHtml(contract.tenantName)}</span></td><td><strong>${money.format(contract.monthlyRent)}</strong></td><td>${formatDate(contract.startDate)}</td><td>${formatDate(contract.endDate)}</td><td>${formatDate(contract.adjustmentDate)}</td><td><span class="status-badge ${statusClassName}">${status}</span></td><td><div class="contract-actions"><button class="icon-button table-edit" type="button" aria-label="Editar contrato de ${escapeHtml(contract.tenantName)}" data-action="edit-contract" data-id="${escapeHtml(contract.id)}">↗</button>${archiveAction}</div></td></tr>`;
+        const rent = `<strong>${money.format(contract.monthlyRent)}</strong>${contract.nonResidential ? `<span>Retenção 25% · ${money.format(contract.monthlyRent * 0.25)}</span><span>Líquido · ${money.format(contract.monthlyRent * 0.75)}</span>` : ""}`;
+        return `<tr><td><strong>${escapeHtml(property?.name || "Imóvel removido")}</strong><span>${escapeHtml(contract.tenantName)}</span></td><td>${rent}</td><td>${formatDate(contract.startDate)}</td><td>${formatDate(contract.endDate)}</td><td>${formatDate(contract.adjustmentDate)}</td><td><span class="status-badge ${statusClassName}">${status}</span></td><td><div class="contract-actions"><button class="icon-button table-edit" type="button" aria-label="Editar contrato de ${escapeHtml(contract.tenantName)}" data-action="edit-contract" data-id="${escapeHtml(contract.id)}">↗</button>${archiveAction}</div></td></tr>`;
       }).join("") : `<tr><td class="contract-filter-empty" colspan="7">Não há contratos ${contractFilter === "archived" ? "arquivados" : "não arquivados"}.</td></tr>`}
       </tbody></table></div>
     </section>` : `<section class="empty-state page-empty"><span class="empty-icon">▤</span><h2>Ainda sem contratos</h2><p>Associe um contrato a um imóvel para acompanhar rendas e datas de atualização.</p><button class="button button-primary" type="button" data-action="new-contract">Criar contrato</button></section>`}`;
@@ -835,20 +843,25 @@ function renderPayments() {
       <label class="period-picker"><span>Período</span><input type="month" value="${escapeHtml(selectedPeriod)}" data-period></label>
     </section>
     <section class="payment-summary-grid">
-      <article class="summary-tile"><span>Previsto</span><strong>${money.format(summary.total)}</strong><small>${summary.chargeCount} rendas</small></article>
+      <article class="summary-tile"><span>Previsto líquido</span><strong>${money.format(summary.total)}</strong><small>${summary.chargeCount} rendas</small></article>
       <article class="summary-tile"><span>Recebido</span><strong class="summary-green">${money.format(summary.received)}</strong><small>${summary.paidCount} rendas completas</small></article>
       <article class="summary-tile"><span>Em falta</span><strong class="summary-orange">${money.format(summary.missing)}</strong><small>${summary.overdueCount} em atraso</small></article>
     </section>
     ${charges.length ? `<section class="panel table-panel payment-table-panel">
       <div class="table-toolbar"><div><strong>Cobranças de ${escapeHtml(formatMonth(selectedPeriod))}</strong><span>Os valores só mudam quando regista um pagamento.</span></div></div>
-      <div class="table-scroll"><table><thead><tr><th>Imóvel / arrendatário</th><th>Vencimento</th><th>Renda</th><th>Recebido</th><th>Em falta</th><th>Estado</th><th><span class="sr-only">Ação</span></th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr><th>Imóvel / arrendatário</th><th>Vencimento</th><th>Renda bruta / líquida</th><th>Recebido</th><th>Em falta</th><th>Estado</th><th><span class="sr-only">Ação</span></th></tr></thead><tbody>
       ${charges.map((charge) => {
         const contract = state.contracts.find((item) => item.id === charge.contractId);
         const property = propertyForContract(charge.contractId);
         const paid = getPaidAmount(charge);
-        const balance = Math.max(0, charge.amount - paid);
-        const status = getChargeStatus(charge, today);
-        return `<tr><td><strong>${escapeHtml(property?.name || "Imóvel")}</strong><span>${escapeHtml(contract?.tenantName || "")}</span></td><td>${formatDate(charge.dueDate)}</td><td><strong>${money.format(charge.amount)}</strong></td><td>${money.format(paid)}${charge.payments?.length ? `<span>Último · ${formatDate(charge.payments[charge.payments.length - 1].date)}</span>` : ""}</td><td><strong>${money.format(balance)}</strong></td><td><span class="status-badge ${statusClass(status)}">${statusLabel(status)}</span></td><td>${balance > 0 ? `<button class="button button-secondary button-small" type="button" data-action="register-payment" data-id="${escapeHtml(charge.id)}">Registar pagamento</button>` : '<span class="paid-check" aria-label="Totalmente recebida">✓</span>'}</td></tr>`;
+        const netAmount = getChargeNetAmount(charge, contract);
+        const withholdingAmount = getChargeWithholding(charge, contract);
+        const balance = Math.max(0, netAmount - paid);
+        const status = getChargeStatus(charge, today, contract);
+        const rent = withholdingAmount
+          ? `<strong>${money.format(charge.amount)}</strong><span>Retenção (25%) · ${money.format(withholdingAmount)}</span><span>Líquido a receber · ${money.format(netAmount)}</span>`
+          : `<strong>${money.format(charge.amount)}</strong>`;
+        return `<tr><td><strong>${escapeHtml(property?.name || "Imóvel")}</strong><span>${escapeHtml(contract?.tenantName || "")}</span></td><td>${formatDate(charge.dueDate)}</td><td>${rent}</td><td>${money.format(paid)}${charge.payments?.length ? `<span>Último · ${formatDate(charge.payments[charge.payments.length - 1].date)}</span>` : ""}</td><td><strong>${money.format(balance)}</strong></td><td><span class="status-badge ${statusClass(status)}">${statusLabel(status)}</span></td><td>${balance > 0 ? `<button class="button button-secondary button-small" type="button" data-action="register-payment" data-id="${escapeHtml(charge.id)}">Registar pagamento</button>` : '<span class="paid-check" aria-label="Totalmente recebida">✓</span>'}</td></tr>`;
       }).join("")}
       </tbody></table></div>
     </section>` : `<section class="empty-state page-empty"><span class="empty-icon">€</span><h2>Sem cobranças neste período</h2><p>Não há contratos ativos a cobrar neste mês. Pode selecionar outro período ou adicionar um contrato.</p><button class="button button-primary" type="button" data-action="new-contract">Adicionar contrato</button></section>`}
@@ -922,7 +935,9 @@ function closeDialog(saved = false) {
     && !window.confirm("Existem alterações por guardar. Quer descartá-las?")) {
     return false;
   }
+  approvedDialogClosures += 1;
   dialog.close();
+  dialogContent.replaceChildren();
   return true;
 }
 
@@ -934,7 +949,7 @@ function openPropertyForm(property) {
       <div class="form-grid">
         <label class="form-field form-field-wide">Nome do imóvel<input name="name" required maxlength="80" value="${escapeHtml(property?.name || "")}" placeholder="Ex.: Apartamento Alfama"></label>
         <label class="form-field form-field-wide">Morada<input name="address" required maxlength="160" value="${escapeHtml(property?.address || "")}" placeholder="Rua, localidade"></label>
-        <label class="form-field">Tipo<select name="type"><option ${property?.type === "Apartamento" ? "selected" : ""}>Apartamento</option><option ${property?.type === "Moradia" ? "selected" : ""}>Moradia</option><option ${property?.type === "Outro" ? "selected" : ""}>Outro</option></select></label>
+        <label class="form-field">Tipo<select name="type"><option ${property?.type === "Apartamento" ? "selected" : ""}>Apartamento</option><option ${property?.type === "Moradia" ? "selected" : ""}>Moradia</option><option ${property?.type === "Loja" ? "selected" : ""}>Loja</option><option ${property?.type === "Escritório" ? "selected" : ""}>Escritório</option><option ${property?.type === "Outro" ? "selected" : ""}>Outro</option></select></label>
         <label class="form-field">Quartos<input name="bedrooms" type="number" min="0" max="99" value="${escapeHtml(property?.bedrooms ?? 1)}"></label>
         <label class="form-field">Área (m²)<input name="area" type="number" min="0" max="99999" value="${escapeHtml(property?.area ?? "")}" placeholder="Opcional"></label>
         <label class="form-field form-field-wide">Notas<textarea name="notes" rows="2" maxlength="500" placeholder="Opcional">${escapeHtml(property?.notes || "")}</textarea></label>
@@ -958,9 +973,10 @@ function openContractForm(contract, preferredPropertyId) {
       <div class="dialog-heading"><div><p class="eyebrow">${editing ? "ATUALIZAR REGISTO" : "NOVO ARRENDAMENTO"}</p><h2 id="dialog-title">${editing ? "Editar contrato" : "Adicionar contrato"}</h2></div><button class="dialog-close" type="button" data-action="close-dialog" aria-label="Fechar">×</button></div>
       <div class="form-grid">
         <label class="form-field form-field-wide">Imóvel<select name="propertyId" required>${propertyOptions}</select></label>
-        <label class="form-field">Nome do arrendatário<input name="tenantName" required maxlength="100" value="${escapeHtml(contract?.tenantName || "")}"></label>
+        <label class="form-field">Nome do arrendatário / empresa<input name="tenantName" required maxlength="100" value="${escapeHtml(contract?.tenantName || "")}"></label>
         <label class="form-field">Email do arrendatário<input name="tenantEmail" type="email" maxlength="160" value="${escapeHtml(contract?.tenantEmail || "")}" placeholder="Opcional"></label>
-        <label class="form-field">Renda mensal (€)<input name="monthlyRent" type="number" required min="0.01" step="0.01" value="${escapeHtml(contract?.monthlyRent ?? "")}"></label>
+        <label class="form-field">Finalidade<select name="nonResidential"><option value="false" ${!contract?.nonResidential ? "selected" : ""}>Habitacional</option><option value="true" ${contract?.nonResidential ? "selected" : ""}>Não habitacional / empresa</option></select><small>Para contratos não habitacionais, calcula uma retenção de 25% e o líquido a receber.</small></label>
+        <label class="form-field">Renda bruta mensal (€)<input name="monthlyRent" type="number" required min="0.01" step="0.01" value="${escapeHtml(contract?.monthlyRent ?? "")}"></label>
         <label class="form-field">Caução (€)<input name="deposit" type="number" min="0" step="0.01" value="${escapeHtml(contract?.deposit ?? 0)}"></label>
         <label class="form-field">Início do contrato<input name="startDate" type="date" required value="${escapeHtml(contract?.startDate || today)}"></label>
         <label class="form-field">Fim do contrato<input name="endDate" type="date" value="${escapeHtml(contract?.endDate || "")}"></label>
@@ -987,11 +1003,13 @@ function openArchiveConfirmation(contract) {
 function openPaymentForm(charge) {
   const contract = state.contracts.find((item) => item.id === charge.contractId);
   const property = propertyForContract(charge.contractId);
-  const balance = Math.max(0, charge.amount - getPaidAmount(charge));
+  const netAmount = getChargeNetAmount(charge, contract);
+  const withholdingAmount = getChargeWithholding(charge, contract);
+  const balance = Math.max(0, netAmount - getPaidAmount(charge));
   showDialog(`
     <form id="payment-form" data-id="${escapeHtml(charge.id)}">
       <div class="dialog-heading"><div><p class="eyebrow">REGISTAR COBRANÇA</p><h2 id="dialog-title">Novo pagamento</h2></div><button class="dialog-close" type="button" data-action="close-dialog" aria-label="Fechar">×</button></div>
-      <div class="payment-context"><strong>${escapeHtml(property?.name || "Imóvel")}</strong><span>${escapeHtml(contract?.tenantName || "")} · ${escapeHtml(formatMonth(charge.period))}</span><small>Valor em falta: ${money.format(balance)}</small></div>
+      <div class="payment-context"><strong>${escapeHtml(property?.name || "Imóvel")}</strong><span>${escapeHtml(contract?.tenantName || "")} · ${escapeHtml(formatMonth(charge.period))}</span>${withholdingAmount ? `<small>Renda bruta: ${money.format(charge.amount)} · retenção (25%): ${money.format(withholdingAmount)}</small><small>Líquido a receber: ${money.format(netAmount)}</small>` : ""}<small>Valor em falta: ${money.format(balance)}</small></div>
       <div class="form-grid">
         <label class="form-field">Valor recebido (€)<input name="amount" type="number" required min="0.01" max="${balance}" step="0.01" value="${balance.toFixed(2)}"></label>
         <label class="form-field">Data do pagamento<input name="date" type="date" required max="${today}" value="${today}"></label>
@@ -1222,6 +1240,7 @@ document.addEventListener("submit", async (event) => {
       return;
     }
     const existing = state.contracts.find((item) => item.id === form.dataset.id);
+    const nonResidentialChanged = Boolean(existing && existing.nonResidential !== (values.nonResidential === "true"));
     const contract = {
       id: existing?.id || `c-${crypto.randomUUID()}`,
       propertyId: values.propertyId,
@@ -1236,12 +1255,20 @@ document.addEventListener("submit", async (event) => {
       status: existing?.status === "archived" ? "archived" : values.status,
       statusBeforeArchive: existing?.statusBeforeArchive ?? null,
       archivedAt: existing?.archivedAt ?? null,
+      nonResidential: values.nonResidential === "true",
       noticeSent: existing?.adjustmentDate === values.adjustmentDate
         ? existing.noticeSent
         : false,
     };
     if (existing) Object.assign(existing, contract);
     else state.contracts.push(contract);
+    if (nonResidentialChanged) {
+      state.charges = state.charges.map((charge) => (
+        charge.contractId === contract.id
+          ? updateChargeWithholding(charge, contract)
+          : charge
+      ));
+    }
     ensureCharges(selectedPeriod);
     saveState(existing ? "Contrato atualizado." : "Contrato adicionado.");
     closeDialog(true);
@@ -1253,7 +1280,8 @@ document.addEventListener("submit", async (event) => {
     const charge = state.charges.find((item) => item.id === form.dataset.id);
     if (!charge) return;
     const amount = Number(values.amount);
-    const balance = Math.max(0, charge.amount - getPaidAmount(charge));
+    const contract = state.contracts.find((item) => item.id === charge.contractId);
+    const balance = Math.max(0, getChargeNetAmount(charge, contract) - getPaidAmount(charge));
     if (amount <= 0 || amount > balance) {
       showToast("O pagamento deve ser superior a zero e não pode exceder o valor em falta.");
       return;
@@ -1267,7 +1295,17 @@ document.addEventListener("submit", async (event) => {
 });
 
 dialog.addEventListener("click", (event) => {
-  if (event.target === dialog) closeDialog();
+  if (event.target === dialog) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+});
+
+dialog.addEventListener("pointerdown", (event) => {
+  if (event.target === dialog) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
 });
 
 dialog.addEventListener("cancel", (event) => {
@@ -1276,7 +1314,8 @@ dialog.addEventListener("cancel", (event) => {
 });
 
 dialog.addEventListener("close", () => {
-  dialogContent.replaceChildren();
+  if (approvedDialogClosures) approvedDialogClosures -= 1;
+  else dialog.showModal();
 });
 
 function registerServiceWorker() {
