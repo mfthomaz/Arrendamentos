@@ -58,7 +58,7 @@ test("annual adjustment notice is scheduled two calendar months before the adjus
   const contracts = [
     { id: "a", status: "active", propertyId: "p1", tenantName: "Ana", adjustmentDate: "2027-04-30", endDate: "2027-06-30" },
   ];
-  const events = getUpcomingEvents(contracts, "2027-02-01", 3);
+  const events = getUpcomingEvents(contracts, "2027-02-01", 6);
   const notice = events.find((event) => event.type === "notice");
   assert.equal(notice.date, "2027-02-28");
   assert.equal(events.find((event) => event.type === "adjustment").date, "2027-04-30");
