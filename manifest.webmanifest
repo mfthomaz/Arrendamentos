@@ -1,0 +1,26 @@
+{
+  "id": "./",
+  "name": "CasaThomaz — Gestão de arrendamentos",
+  "short_name": "CasaThomaz",
+  "description": "Gestão privada dos seus imóveis, contratos e rendas.",
+  "lang": "pt-PT",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f6f1",
+  "theme_color": "#f5f5f0",
+  "icons": [
+    {
+      "src": "./icons/casathomaz-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/casathomaz-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -8,8 +8,17 @@ import {
   getUpcomingEvents,
   toISODate,
 } from "./domain.js";
+import {
+  createSupabaseClient,
+  emptyData,
+  hasRecords,
+  mergeSnapshots,
+} from "./sync.js";
 
 const STORAGE_KEY = "casathomaz.v1";
+const CONFIG_KEY = "casathomaz.supabase-config";
+const SESSION_KEY = "casathomaz.supabase-session";
+const LEGACY_OWNER_KEY = "casathomaz.legacy-owner";
 const root = document.querySelector("#app-content");
 const dialog = document.querySelector("#app-dialog");
 const dialogContent = document.querySelector("#dialog-content");
@@ -19,16 +28,43 @@ const dateFormat = new Intl.DateTimeFormat("pt-PT", { day: "numeric", month: "sh
 const monthFormat = new Intl.DateTimeFormat("pt-PT", { month: "long", year: "numeric" });
 const today = toISODate(new Date());
 const currentPeriod = today.slice(0, 7);
+const emptyConfig = { url: "", publishableKey: "" };
 
-let state = loadState();
+let supabaseConfig = readSupabaseConfig();
+let supabase = isSupabaseConfigured(supabaseConfig) ? createSupabaseClient(supabaseConfig) : null;
+let state = supabase ? emptyData() : loadState();
 let activeView = "dashboard";
 let selectedPeriod = currentPeriod;
 let horizon = 6;
 let toastTimer;
+let authSession = null;
+let authUser = null;
+let remoteRevision = null;
+let cloudStatus = supabase ? "signed-out" : "local";
+let migrationChoice = null;
+let syncTimer;
+let syncPoller;
+let syncPromise = null;
+let syncAgain = false;
+let pendingConflictCount = 0;
+let authMode = "signin";
+
+function isSupabaseConfigured(config) {
+  return Boolean(config?.url && config?.publishableKey);
+}
+
+function readSupabaseConfig() {
+  try {
+    return { ...emptyConfig, ...JSON.parse(localStorage.getItem(CONFIG_KEY) || "{}") };
+  } catch {
+    return { ...emptyConfig };
+  }
+}
 
 function loadState() {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (!saved) {
+    if (supabase) return emptyData();
     const demo = createDemoData(today);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(demo));
     return demo;
@@ -41,7 +77,12 @@ function loadState() {
 }
 
 function saveState(message) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (authUser) {
+    persistAccountCache(true);
+    queueCloudSync();
+  } else {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
   if (message) showToast(message);
 }
 
@@ -80,6 +121,479 @@ function showToast(message) {
   toast.classList.add("is-visible");
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => toast.classList.remove("is-visible"), 3200);
+}
+
+function userDataKey(userId) {
+  return `casathomaz.user-data.${userId}`;
+}
+
+function readAccountCache(userId) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(userDataKey(userId)) || "null");
+    if (!saved?.data || !Array.isArray(saved.data.properties) || !Array.isArray(saved.data.contracts) || !Array.isArray(saved.data.charges)) {
+      return null;
+    }
+    return { data: saved.data, pending: Boolean(saved.pending) };
+  } catch {
+    return null;
+  }
+}
+
+function persistAccountCache(pending = false) {
+  if (!authUser) return;
+  localStorage.setItem(userDataKey(authUser.id), JSON.stringify({ data: state, pending }));
+}
+
+function setCloudStatus(status, detail = "") {
+  cloudStatus = status;
+  const labels = {
+    local: "Só neste dispositivo",
+    "signed-out": "Inicie sessão para sincronizar",
+    loading: "A carregar dados privados…",
+    syncing: "A sincronizar…",
+    synced: "Sincronizado",
+    offline: "Offline · alterações guardadas neste dispositivo",
+    error: "Erro de sincronização",
+  };
+  const statusElement = document.querySelector("#sync-label");
+  if (statusElement) {
+    statusElement.textContent = detail ? `${labels[status] || status} — ${detail}` : labels[status] || status;
+    statusElement.dataset.status = status;
+  }
+  updateAccountActions();
+}
+
+function updateAccountActions() {
+  const actions = document.querySelector("#account-actions");
+  if (!actions) return;
+  const installButton = window.deferredInstallPrompt
+    ? '<button class="button button-secondary button-small" type="button" data-action="install-app">Instalar app</button>'
+    : "";
+  if (authUser) {
+    const email = escapeHtml(authUser.email || "Conta");
+    const backupButton = localStorage.getItem(`casathomaz.migration-backup.${authUser.id}`)
+      ? '<button class="text-button backup-import-button" type="button" data-action="restore-local-backup">Importar cópia local</button>'
+      : "";
+    actions.innerHTML = `${installButton}${backupButton}<span class="cloud-state" role="status" id="cloud-state">${cloudStatus === "error" ? "!" : cloudStatus === "synced" ? "✓" : "↻"} ${escapeHtml(document.querySelector("#sync-label")?.textContent || "A sincronizar…")}</span><span class="user-chip"><span class="avatar" aria-hidden="true">${escapeHtml(email.slice(0, 2).toUpperCase())}</span><span class="user-name">${email}</span></span><button class="button button-secondary button-small" type="button" data-action="sign-out">Sair</button>`;
+    return;
+  }
+  if (!supabase) {
+    actions.innerHTML = `${installButton}<span class="local-state" role="status">Só neste dispositivo</span><button class="button button-secondary button-small" type="button" data-action="configure-supabase">Configurar sincronização</button>`;
+  } else {
+    actions.replaceChildren();
+  }
+}
+
+function renderAuth(message = "") {
+  document.body.classList.add("auth-required");
+  document.querySelector(".sidebar").hidden = true;
+  document.querySelector("#local-profile").hidden = true;
+  updateAccountActions();
+  root.innerHTML = `
+    <section class="auth-page">
+      <div class="auth-card">
+        <span class="auth-brand-mark" aria-hidden="true">⌂</span>
+        <p class="eyebrow">CASATHOMAZ · DADOS PRIVADOS</p>
+        <h1>${migrationChoice ? "Importar carteira local?" : "Aceda à sua carteira"}</h1>
+        ${migrationChoice
+          ? renderMigrationOptions()
+          : `<p class="auth-subtitle">Inicie sessão para carregar os seus imóveis, contratos e pagamentos sincronizados.</p>
+            ${message ? `<p class="auth-message" role="status">${escapeHtml(message)}</p>` : ""}
+            <form id="auth-form" data-mode="${authMode}">
+              <label class="form-field">Email<input name="email" type="email" required autocomplete="email"></label>
+              <label class="form-field">Palavra-passe<input name="password" type="password" required minlength="8" autocomplete="${authMode === "signup" ? "new-password" : "current-password"}"></label>
+              <button class="button button-primary auth-submit" type="submit">${authMode === "signup" ? "Criar conta" : "Iniciar sessão"}</button>
+            </form>
+            <div class="auth-foot"><span>${authMode === "signup" ? "Já tem conta?" : "Novo na CasaThomaz?"}</span><button class="text-button" type="button" data-action="toggle-auth-mode" data-mode="${authMode === "signup" ? "signin" : "signup"}">${authMode === "signup" ? "Iniciar sessão" : "Criar conta"}</button></div>
+            <button class="text-button auth-config-link" type="button" data-action="configure-supabase">Configuração do Supabase</button>`}
+      </div>
+    </section>`;
+}
+
+function renderMigrationOptions() {
+  return `
+    <p class="auth-subtitle">Encontrámos dados guardados neste navegador. Antes de os juntar, preservaremos uma cópia local de segurança.</p>
+    <div class="migration-summary">
+      <strong>${migrationChoice.local.properties.length} imóveis · ${migrationChoice.local.contracts.length} contratos · ${migrationChoice.local.charges.length} cobranças</strong>
+      <span>${migrationChoice.remote ? "A conta Supabase já contém dados." : "A conta Supabase ainda não tem uma carteira."}</span>
+    </div>
+    <button class="button button-primary auth-submit" type="button" data-action="migrate-local">Juntar e sincronizar dados locais</button>
+    <button class="button button-secondary auth-submit" type="button" data-action="skip-migration">Não importar agora</button>
+    <p class="auth-footnote">Registos com o mesmo identificador mas valores diferentes serão mantidos como cópias separadas; não apagaremos os dados locais originais.</p>`;
+}
+
+function renderConfiguration(message = "") {
+  document.body.classList.add("auth-required");
+  document.querySelector(".sidebar").hidden = true;
+  document.querySelector("#local-profile").hidden = true;
+  updateAccountActions();
+  root.innerHTML = `
+    <section class="auth-page">
+      <div class="auth-card auth-card-wide">
+        <button class="text-button auth-back" type="button" data-action="close-configuration">← Voltar</button>
+        <p class="eyebrow">LIGAÇÃO PRIVADA</p>
+        <h1>Configurar sincronização</h1>
+        <p class="auth-subtitle">Use o URL do seu projeto Supabase e a chave publicável (anon). Nunca introduza a chave <code>service_role</code>.</p>
+        ${message ? `<p class="auth-message" role="status">${escapeHtml(message)}</p>` : ""}
+        <form id="supabase-config-form">
+          <label class="form-field">URL do projeto Supabase<input name="url" type="url" required placeholder="https://seu-projeto.supabase.co" value="${escapeHtml(supabaseConfig.url)}"></label>
+          <label class="form-field">Chave publicável / anon<input name="publishableKey" type="password" required autocomplete="off" value="${escapeHtml(supabaseConfig.publishableKey)}"></label>
+          <div class="config-note"><strong>Estas credenciais são guardadas só neste navegador.</strong><span>Configure-as uma vez em cada computador. A proteção dos dados é aplicada pelo login e pelas políticas RLS da base de dados.</span></div>
+          <div class="dialog-actions"><button class="button button-secondary" type="button" data-action="close-configuration">Cancelar</button><button class="button button-primary" type="submit">Guardar e continuar</button></div>
+        </form>
+      </div>
+    </section>`;
+}
+
+function looksLikeSecretKey(key) {
+    if (/^(sb_secret_|service_role)/i.test(key)) return true;
+    const payload = key.split(".")[1];
+    if (!payload) return false;
+    try {
+      const encoded = payload.replace(/-/g, "+").replace(/_/g, "/");
+      const claims = JSON.parse(atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "=")));
+      return claims.role === "service_role";
+    } catch {
+      return false;
+    }
+}
+
+function parseData(raw, description) {
+  const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+  if (!data || !Array.isArray(data.properties) || !Array.isArray(data.contracts) || !Array.isArray(data.charges)) {
+    throw new Error(`${description} não têm um formato válido. Os dados originais foram preservados.`);
+  }
+  return data;
+}
+
+function readLegacyData() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  return raw ? parseData(raw, "Os dados locais") : null;
+}
+
+function storeSession(session) {
+  authSession = session;
+  authUser = session?.user || null;
+  if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  else localStorage.removeItem(SESSION_KEY);
+  updateAccountActions();
+}
+
+function readSavedSession() {
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+  } catch {
+    localStorage.removeItem(SESSION_KEY);
+    return null;
+  }
+}
+
+async function refreshSessionIfNeeded() {
+  if (!authSession || authSession.expiresAt > Math.floor(Date.now() / 1000) + 90) return authSession;
+  const refreshed = await supabase.refreshSession(authSession);
+  if (!refreshed) throw new Error("A sessão expirou. Inicie sessão novamente.");
+  storeSession(refreshed);
+  return refreshed;
+}
+
+async function startCloudSync() {
+  document.body.classList.add("auth-required");
+  renderAuth("A verificar a sessão…");
+  try {
+    const callbackSession = supabase.sessionFromUrl(window.location.hash);
+    if (callbackSession) {
+      const user = await supabase.getUser(callbackSession);
+      history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+      storeSession({ ...callbackSession, user });
+      await loadUserData();
+      return;
+    }
+    const savedSession = readSavedSession();
+    if (!savedSession?.refreshToken) {
+      renderAuth();
+      return;
+    }
+    storeSession(savedSession);
+    if (savedSession.expiresAt <= Math.floor(Date.now() / 1000) + 90) {
+      storeSession(await supabase.refreshSession(savedSession));
+    }
+    if (!authSession?.user?.id) throw new Error("Não foi possível renovar a sessão.");
+    await loadUserData();
+  } catch (error) {
+    const savedSession = readSavedSession();
+    const localCache = savedSession?.user?.id ? readAccountCache(savedSession.user.id) : null;
+    if (!navigator.onLine && savedSession?.user?.id && localCache) {
+      storeSession(savedSession);
+      state = localCache.data;
+      document.body.classList.remove("auth-required");
+      document.querySelector(".sidebar").hidden = false;
+      render();
+      setCloudStatus("offline");
+      return;
+    }
+    if (error.status === 401) storeSession(null);
+    renderAuth(error.message || "Não foi possível carregar a carteira sincronizada.");
+  }
+}
+
+async function loadUserData() {
+  setCloudStatus("loading");
+  const session = await refreshSessionIfNeeded();
+  const [remote, localCache] = await Promise.all([
+    supabase.getOwnerData(session, authUser.id),
+    Promise.resolve(readAccountCache(authUser.id)),
+  ]);
+  const legacyOwner = localStorage.getItem(LEGACY_OWNER_KEY);
+  const legacy = !localCache && (!legacyOwner || legacyOwner === authUser.id)
+    ? readLegacyData()
+    : null;
+
+  if (legacy && hasRecords(legacy)) {
+    migrationChoice = { local: legacy, remote, userId: authUser.id };
+    renderAuth();
+    return;
+  }
+  migrationChoice = null;
+
+  if (remote) {
+    remoteRevision = Number(remote.revision);
+    if (localCache?.pending) {
+      const merged = mergeSnapshots(remote.data, localCache.data);
+      state = merged.data;
+      pendingConflictCount = merged.conflicts;
+      persistAccountCache(true);
+      queueCloudSync();
+    } else {
+      state = parseData(remote.data, "Os dados da conta");
+      persistAccountCache(false);
+    }
+  } else if (localCache && (localCache.pending || hasRecords(localCache.data))) {
+    state = parseData(localCache.data, "Os dados pendentes");
+    remoteRevision = null;
+    persistAccountCache(true);
+    queueCloudSync();
+  } else {
+    state = emptyData();
+    remoteRevision = null;
+    persistAccountCache(false);
+    setCloudStatus("synced");
+  }
+
+  document.body.classList.remove("auth-required");
+  document.querySelector(".sidebar").hidden = false;
+  render();
+  setCloudStatus(navigator.onLine ? "synced" : "offline");
+  syncPoller ||= window.setInterval(checkRemoteChanges, 30000);
+}
+
+async function finishMigration(importLocal) {
+  if (!migrationChoice) return;
+  const { local, remote, userId } = migrationChoice;
+  localStorage.setItem(`casathomaz.migration-backup.${userId}`, JSON.stringify(local));
+  localStorage.setItem(LEGACY_OWNER_KEY, userId);
+  remoteRevision = remote ? Number(remote.revision) : null;
+  if (importLocal) {
+    const merged = mergeSnapshots(remote?.data || emptyData(), local);
+    state = merged.data;
+    pendingConflictCount = merged.conflicts;
+  } else {
+    state = remote ? parseData(remote.data, "Os dados da conta") : emptyData();
+    pendingConflictCount = 0;
+  }
+  migrationChoice = null;
+  document.body.classList.remove("auth-required");
+  document.querySelector(".sidebar").hidden = false;
+  persistAccountCache(importLocal || !remote);
+  render();
+  if (importLocal || !remote) queueCloudSync();
+  else setCloudStatus("synced");
+}
+
+function queueCloudSync() {
+  if (!authUser || !supabase) return;
+  persistAccountCache(true);
+  if (!navigator.onLine) {
+    setCloudStatus("offline");
+    return;
+  }
+  setCloudStatus("syncing");
+  window.clearTimeout(syncTimer);
+  syncTimer = window.setTimeout(syncNow, 500);
+}
+
+async function syncNow() {
+  if (!authUser || !supabase) return;
+  if (!navigator.onLine) {
+    setCloudStatus("offline");
+    return;
+  }
+  if (syncPromise) {
+    syncAgain = true;
+    return syncPromise;
+  }
+  syncPromise = (async () => {
+    try {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const session = await refreshSessionIfNeeded();
+        const payload = JSON.parse(JSON.stringify(state));
+        if (remoteRevision === null) {
+          try {
+            const inserted = await supabase.insertOwnerData(session, authUser.id, payload);
+            if (inserted) {
+              remoteRevision = Number(inserted.revision);
+              if (JSON.stringify(state) !== JSON.stringify(payload)) {
+                persistAccountCache(true);
+                continue;
+              }
+              persistAccountCache(false);
+              localStorage.setItem(LEGACY_OWNER_KEY, authUser.id);
+              const conflicts = pendingConflictCount;
+              pendingConflictCount = 0;
+              setCloudStatus("synced", conflicts ? `${conflicts} conflito(s) preservado(s) como cópias` : "");
+              return;
+            }
+          } catch (error) {
+            if (error.status !== 409) throw error;
+          }
+          const current = await supabase.getOwnerData(session, authUser.id);
+          if (!current) throw new Error("Não foi possível criar nem carregar a carteira sincronizada.");
+          remoteRevision = Number(current.revision);
+          const merged = mergeSnapshots(current.data, state);
+          state = merged.data;
+          pendingConflictCount += merged.conflicts;
+          persistAccountCache(true);
+          continue;
+        }
+
+        const updated = await supabase.updateOwnerData(session, authUser.id, remoteRevision, payload);
+        if (updated) {
+          remoteRevision = Number(updated.revision);
+          if (JSON.stringify(state) !== JSON.stringify(payload)) {
+            persistAccountCache(true);
+            continue;
+          }
+          persistAccountCache(false);
+          localStorage.setItem(LEGACY_OWNER_KEY, authUser.id);
+          const conflicts = pendingConflictCount;
+          pendingConflictCount = 0;
+          setCloudStatus("synced", conflicts ? `${conflicts} conflito(s) preservado(s) como cópias` : "");
+          return;
+        }
+        const current = await supabase.getOwnerData(session, authUser.id);
+        if (!current) {
+          remoteRevision = null;
+          continue;
+        }
+        remoteRevision = Number(current.revision);
+        const merged = mergeSnapshots(current.data, state);
+        state = merged.data;
+        pendingConflictCount += merged.conflicts;
+        persistAccountCache(true);
+        render();
+      }
+      throw new Error("Houve alterações simultâneas. Os seus dados locais foram preservados; tente sincronizar novamente.");
+    } catch (error) {
+      if (error.status === 401) {
+        storeSession(null);
+        document.body.classList.add("auth-required");
+        document.querySelector(".sidebar").hidden = true;
+        renderAuth("A sessão terminou. Inicie sessão para continuar a sincronizar.");
+      }
+      setCloudStatus(navigator.onLine ? "error" : "offline", error.message);
+    } finally {
+      syncPromise = null;
+      if (syncAgain) {
+        syncAgain = false;
+        syncNow();
+      }
+    }
+  })();
+  return syncPromise;
+}
+
+async function checkRemoteChanges() {
+  if (!authUser || !navigator.onLine || syncPromise || migrationChoice) return;
+  try {
+    const session = await refreshSessionIfNeeded();
+    const remote = await supabase.getOwnerData(session, authUser.id);
+    const cache = readAccountCache(authUser.id);
+    if (!remote) {
+      if (cache?.pending) {
+        remoteRevision = null;
+        await syncNow();
+      }
+      return;
+    }
+    if (Number(remote.revision) === remoteRevision) {
+      if (cache?.pending) await syncNow();
+      return;
+    }
+    if (cache?.pending) {
+      const merged = mergeSnapshots(remote.data, state);
+      state = merged.data;
+      remoteRevision = Number(remote.revision);
+      pendingConflictCount += merged.conflicts;
+      persistAccountCache(true);
+      render();
+      queueCloudSync();
+      return;
+    }
+    state = parseData(remote.data, "Os dados da conta");
+    remoteRevision = Number(remote.revision);
+    persistAccountCache(false);
+    render();
+    setCloudStatus("synced");
+  } catch (error) {
+    setCloudStatus(navigator.onLine ? "error" : "offline", error.message);
+  }
+}
+
+async function submitAuth(form) {
+  const values = Object.fromEntries(new FormData(form).entries());
+  const mode = form.dataset.mode;
+  if (values.password.length < 8) {
+    renderAuth("A palavra-passe deve ter pelo menos 8 caracteres.");
+    return;
+  }
+  try {
+    setCloudStatus("loading");
+    const session = mode === "signup"
+      ? await supabase.signUp(values.email.trim(), values.password)
+      : await supabase.signIn(values.email.trim(), values.password);
+    if (!session) {
+      renderAuth(mode === "signup"
+        ? "Conta criada. Confirme o endereço de email e depois inicie sessão."
+        : "Não foi devolvida uma sessão. Verifique a configuração de confirmação de email no Supabase.");
+      return;
+    }
+    storeSession(session);
+    await loadUserData();
+  } catch (error) {
+    renderAuth(error.message);
+  }
+}
+
+async function signOut() {
+  const userId = authUser.id;
+  if (readAccountCache(userId)?.pending && navigator.onLine) await syncNow();
+  const session = authSession;
+  localStorage.setItem(userDataKey(userId), JSON.stringify({
+    data: state,
+    pending: Boolean(readAccountCache(userId)?.pending),
+  }));
+  storeSession(null);
+  authUser = null;
+  authSession = null;
+  remoteRevision = null;
+  state = emptyData();
+  document.body.classList.add("auth-required");
+  document.querySelector(".sidebar").hidden = true;
+  try {
+    await supabase.signOut(session);
+  } catch {
+    showToast("Sessão local terminada; confirme a saída no servidor quando voltar a estar online.");
+  }
+  renderAuth();
 }
 
 function propertyForContract(contractId) {
@@ -320,7 +834,7 @@ function renderPayments() {
       }).join("")}
       </tbody></table></div>
     </section>` : `<section class="empty-state page-empty"><span class="empty-icon">€</span><h2>Sem cobranças neste período</h2><p>Não há contratos ativos a cobrar neste mês. Pode selecionar outro período ou adicionar um contrato.</p><button class="button button-primary" type="button" data-action="new-contract">Adicionar contrato</button></section>`}
-    <p class="privacy-note"><span aria-hidden="true">ⓘ</span> Os registos de cobrança são mantidos apenas neste navegador. A aplicação não liga a bancos nem processa pagamentos.</p>`;
+    <p class="privacy-note"><span aria-hidden="true">ⓘ</span> ${authUser ? "Os registos são privados da sua conta Supabase e sincronizados entre dispositivos." : "Os registos são mantidos apenas neste navegador. A aplicação não liga a bancos nem processa pagamentos."}</p>`;
 }
 
 function renderAgenda() {
@@ -351,6 +865,9 @@ const renderers = {
 
 function render() {
   root.innerHTML = renderers[activeView]();
+  document.body.classList.remove("auth-required");
+  document.querySelector(".sidebar").hidden = false;
+  document.querySelector("#local-profile").hidden = Boolean(authUser);
   document.querySelectorAll(".nav-item").forEach((item) => {
     const isCurrent = item.dataset.view === activeView;
     item.classList.toggle("is-active", isCurrent);
@@ -362,6 +879,7 @@ function render() {
   const count = document.querySelector("#agenda-count");
   count.hidden = !pendingNotices;
   count.textContent = pendingNotices || "";
+  updateAccountActions();
 }
 
 function showDialog(content) {
@@ -467,6 +985,54 @@ document.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-action]");
   if (!button) return;
   const { action, id, propertyId, contractId } = button.dataset;
+  if (action === "install-app" && window.deferredInstallPrompt) {
+    const prompt = window.deferredInstallPrompt;
+    window.deferredInstallPrompt = null;
+    await prompt.prompt();
+    updateAccountActions();
+    return;
+  }
+  if (action === "configure-supabase") {
+    renderConfiguration();
+    return;
+  }
+  if (action === "close-configuration") {
+    if (supabase) renderAuth();
+    else {
+      document.body.classList.remove("auth-required");
+      document.querySelector(".sidebar").hidden = false;
+      render();
+    }
+    return;
+  }
+  if (action === "toggle-auth-mode") {
+    authMode = button.dataset.mode;
+    renderAuth();
+    return;
+  }
+  if (action === "sign-out") {
+    await signOut();
+    return;
+  }
+  if (action === "migrate-local") {
+    await finishMigration(true);
+    return;
+  }
+  if (action === "restore-local-backup") {
+    try {
+      const local = parseData(localStorage.getItem(`casathomaz.migration-backup.${authUser.id}`), "A cópia local");
+      const remote = await supabase.getOwnerData(await refreshSessionIfNeeded(), authUser.id);
+      migrationChoice = { local, remote, userId: authUser.id };
+      renderAuth();
+    } catch (error) {
+      showToast(error.message);
+    }
+    return;
+  }
+  if (action === "skip-migration") {
+    await finishMigration(false);
+    return;
+  }
   if (action === "close-dialog") closeDialog();
   if (action === "new-property") openPropertyForm();
   if (action === "edit-property") openPropertyForm(state.properties.find((property) => property.id === id));
@@ -508,8 +1074,50 @@ document.addEventListener("change", (event) => {
   }
 });
 
-document.addEventListener("submit", (event) => {
+document.addEventListener("submit", async (event) => {
   const form = event.target;
+  if (form.matches("#auth-form")) {
+    event.preventDefault();
+    await submitAuth(form);
+    return;
+  }
+  if (form.matches("#supabase-config-form")) {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form).entries());
+    let url;
+    try {
+      url = new URL(values.url.trim());
+    } catch {
+      renderConfiguration("Introduza um URL válido do projeto Supabase.");
+      return;
+    }
+    if (url.protocol !== "https:" && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+      renderConfiguration("O projeto Supabase deve usar HTTPS.");
+      return;
+    }
+    if (!values.publishableKey.trim()) {
+      renderConfiguration("Introduza a chave publicável (anon) do projeto.");
+      return;
+    }
+    if (looksLikeSecretKey(values.publishableKey.trim())) {
+      renderConfiguration("Esta parece ser uma chave secret/service-role. Nunca a introduza na aplicação de browser.");
+      return;
+    }
+    if (url.search || url.hash) {
+      renderConfiguration("O URL do projeto não deve incluir parâmetros nem fragmentos.");
+      return;
+    }
+    supabaseConfig = {
+      url: `${url.origin}${url.pathname.replace(/\/+$/, "")}`,
+      publishableKey: values.publishableKey.trim(),
+    };
+    localStorage.setItem(CONFIG_KEY, JSON.stringify(supabaseConfig));
+    supabase = createSupabaseClient(supabaseConfig);
+    authMode = "signin";
+    setCloudStatus("signed-out");
+    renderAuth("Configuração guardada neste navegador.");
+    return;
+  }
   if (!form.matches("#property-form, #contract-form, #payment-form")) return;
   event.preventDefault();
   const values = Object.fromEntries(new FormData(form).entries());
@@ -589,4 +1197,49 @@ dialog.addEventListener("close", () => {
   dialogContent.replaceChildren();
 });
 
-render();
+function registerServiceWorker() {
+  if ("serviceWorker" in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register("./service-worker.js").catch(() => {
+      setCloudStatus(cloudStatus, "PWA offline indisponível neste navegador");
+    });
+  }
+}
+
+function installApp() {
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    window.deferredInstallPrompt = event;
+    updateAccountActions();
+  });
+  window.addEventListener("appinstalled", () => {
+    window.deferredInstallPrompt = null;
+    showToast("CasaThomaz instalada.");
+    updateAccountActions();
+  });
+}
+
+window.addEventListener("online", () => {
+  if (authUser) {
+    setCloudStatus("syncing");
+    const pending = readAccountCache(authUser.id)?.pending;
+    if (pending) syncNow().then(checkRemoteChanges);
+    else checkRemoteChanges();
+  } else if (!supabase) {
+    setCloudStatus("local");
+  }
+});
+window.addEventListener("offline", () => {
+  if (authUser) setCloudStatus("offline");
+});
+window.addEventListener("focus", checkRemoteChanges);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") checkRemoteChanges();
+});
+
+registerServiceWorker();
+installApp();
+if (supabase) {
+  startCloudSync();
+} else {
+  render();
+}

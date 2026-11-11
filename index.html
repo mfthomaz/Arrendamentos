@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f5f5f0">
     <meta name="description" content="Gestão simples e clara dos seus imóveis arrendados.">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./icons/casathomaz.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="./icons/casathomaz-192.svg">
     <title>CasaThomaz — Gestão de arrendamentos</title>
     <link rel="stylesheet" href="./styles.css">
     <script type="module" src="./app.js"></script>
@@ -25,7 +30,8 @@
         <div class="topbar-right">
           <span class="today-label" id="today-label"></span>
           <span class="topbar-divider" aria-hidden="true"></span>
-          <span class="user-chip" aria-label="Perfil do proprietário">
+          <div class="account-actions" id="account-actions"></div>
+          <span class="user-chip" id="local-profile" aria-label="Perfil do proprietário">
             <span class="avatar" aria-hidden="true">CT</span>
             <span class="user-name">Proprietário</span>
           </span>
@@ -58,7 +64,7 @@
         </div>
         <div class="sidebar-foot">
           <span class="status-dot" aria-hidden="true"></span>
-          <span>Dados guardados neste dispositivo</span>
+          <span id="sync-label">Só neste dispositivo</span>
         </div>
       </aside>
 
