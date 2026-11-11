@@ -840,7 +840,7 @@ function renderPayments() {
   const summary = getChargeSummary(state.contracts, state.charges, selectedPeriod, today);
   return `
     <section class="page-heading">
-      <div><p class="eyebrow">CONTROLO DE RENDAS</p><h1>Rendas e pagamentos</h1><p class="heading-subtitle">Registe os pagamentos e identifique valores pendentes ou em atraso.</p></div>
+      <div><p class="eyebrow">CONTROLO DE RENDAS</p><h1>Rendas e pagamentos</h1><p class="heading-subtitle">Para lojas e escritórios, registe o valor líquido que o inquilino paga (75% da renda bruta).</p></div>
       <label class="period-picker"><span>Período</span><input type="month" value="${escapeHtml(selectedPeriod)}" data-period></label>
     </section>
     <section class="payment-summary-grid">
@@ -850,7 +850,7 @@ function renderPayments() {
     </section>
     ${charges.length ? `<section class="panel table-panel payment-table-panel">
       <div class="table-toolbar"><div><strong>Cobranças de ${escapeHtml(formatMonth(selectedPeriod))}</strong><span>Os valores só mudam quando regista um pagamento.</span></div></div>
-      <div class="table-scroll"><table><thead><tr><th>Imóvel / arrendatário</th><th>Vencimento</th><th>Renda bruta / líquida</th><th>Recebido</th><th>Em falta</th><th>Estado</th><th><span class="sr-only">Ação</span></th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr><th>Imóvel / arrendatário</th><th>Vencimento</th><th>Valor a pagar</th><th>Recebido</th><th>Em falta</th><th>Estado</th><th><span class="sr-only">Ação</span></th></tr></thead><tbody>
       ${charges.map((charge) => {
         const contract = state.contracts.find((item) => item.id === charge.contractId);
         const property = propertyForContract(charge.contractId);
@@ -860,8 +860,8 @@ function renderPayments() {
         const balance = Math.max(0, netAmount - paid);
         const status = getChargeStatus(charge, today, contract);
         const rent = withholdingAmount
-          ? `<strong>${money.format(charge.amount)}</strong><span>Retenção (25%) · ${money.format(withholdingAmount)}</span><span>Líquido a receber · ${money.format(netAmount)}</span>`
-          : `<strong>${money.format(charge.amount)}</strong>`;
+          ? `<strong>${money.format(netAmount)}</strong><span>Líquido a pagar</span><span>Renda bruta · ${money.format(charge.amount)}</span><span>Retenção (25%) · ${money.format(withholdingAmount)}</span>`
+          : `<strong>${money.format(netAmount)}</strong>`;
         return `<tr><td><strong>${escapeHtml(property?.name || "Imóvel")}</strong><span>${escapeHtml(contract?.tenantName || "")}</span></td><td>${formatDate(charge.dueDate)}</td><td>${rent}</td><td>${money.format(paid)}${charge.payments?.length ? `<span>Último · ${formatDate(charge.payments[charge.payments.length - 1].date)}</span>` : ""}</td><td><strong>${money.format(balance)}</strong></td><td><span class="status-badge ${statusClass(status)}">${statusLabel(status)}</span></td><td>${balance > 0 ? `<button class="button button-secondary button-small" type="button" data-action="register-payment" data-id="${escapeHtml(charge.id)}">Registar pagamento</button>` : '<span class="paid-check" aria-label="Totalmente recebida">✓</span>'}</td></tr>`;
       }).join("")}
       </tbody></table></div>
