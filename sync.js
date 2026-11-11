@@ -1,16 +1,26 @@
+import { isNonResidentialProperty, updateChargeWithholding } from "./domain.js";
+
 export function emptyData() {
   return { properties: [], contracts: [], charges: [] };
 }
 
 export function normalizeData(data) {
   const normalized = { ...emptyData(), ...(data || {}) };
+  const nonResidentialPropertyIds = new Set(
+    normalized.properties.filter(isNonResidentialProperty).map((property) => property.id),
+  );
   normalized.contracts = normalized.contracts.map((contract) => ({
     ...contract,
     status: contract.status || "active",
     statusBeforeArchive: contract.statusBeforeArchive ?? null,
     archivedAt: contract.archivedAt ?? null,
-    nonResidential: Boolean(contract.nonResidential),
+    nonResidential: Boolean(contract.nonResidential || nonResidentialPropertyIds.has(contract.propertyId)),
   }));
+  const contractsById = new Map(normalized.contracts.map((contract) => [contract.id, contract]));
+  normalized.charges = normalized.charges.map((charge) => {
+    const contract = contractsById.get(charge.contractId);
+    return contract?.nonResidential ? updateChargeWithholding(charge, contract) : charge;
+  });
   return normalized;
 }
 

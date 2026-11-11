@@ -48,6 +48,10 @@ export function getPaidAmount(charge) {
   return (charge.payments || []).reduce((total, payment) => total + Number(payment.amount || 0), 0);
 }
 
+export function isNonResidentialProperty(property) {
+  return property?.type === "Loja" || property?.type === "Escritório";
+}
+
 export function getChargeNetAmount(charge, contract) {
   if (charge.netAmount != null) return Number(charge.netAmount);
   const grossAmount = Number(charge.amount || 0);
