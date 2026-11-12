@@ -189,7 +189,7 @@ test("consolidating properties refuses contracts with different terms", () => {
 
   assert.throws(
     () => consolidateDuplicateProperties(data, "p-keep", "p-remove"),
-    /contratos diferentes/,
+    /contratos destes imóveis têm dados diferentes/,
   );
 });
 

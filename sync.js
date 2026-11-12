@@ -240,7 +240,10 @@ export function consolidateDuplicateProperties(data, keepPropertyId, removePrope
       !usedKeepContracts.has(contract.id)
       && stableValue(withoutFields(contract, ["id", "propertyId"])) === signature
     ));
-    if (matches.length !== 1) {
+    if (!matches.length) {
+      throw new Error("Os contratos destes imóveis têm dados diferentes. Não alterei nenhum dado.");
+    }
+    if (matches.length > 1) {
       throw new Error("Não consegui associar os contratos de forma inequívoca. Não alterei nenhum dado.");
     }
     usedKeepContracts.add(matches[0].id);
