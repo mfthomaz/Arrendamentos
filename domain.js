@@ -112,6 +112,82 @@ export function getChargeDueDate(contract, period) {
   return `${duePeriod}-${String(dueDay).padStart(2, "0")}`;
 }
 
+function stableRecordValue(value) {
+  if (Array.isArray(value)) return `[${value.map(stableRecordValue).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableRecordValue(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function isPaymentSubset(subset, superset) {
+  const counts = new Map();
+  for (const payment of superset) {
+    const key = stableRecordValue(payment);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  for (const payment of subset) {
+    const key = stableRecordValue(payment);
+    const count = counts.get(key) || 0;
+    if (!count) return false;
+    counts.set(key, count - 1);
+  }
+  return true;
+}
+
+export function reclassifyChargePeriod(charges, contract, chargeId, targetPeriod) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(targetPeriod || "")) {
+    throw new Error("Escolha um mês da renda válido.");
+  }
+  const source = charges.find((charge) => charge.id === chargeId);
+  if (!source || source.contractId !== contract?.id) {
+    throw new Error("Não encontrei esta cobrança. Atualize a página e tente novamente.");
+  }
+  if (source.period === targetPeriod) {
+    throw new Error("A cobrança já está associada a esse mês da renda.");
+  }
+
+  const targetMatches = charges.filter((charge) => (
+    charge.id !== source.id
+    && charge.contractId === contract.id
+    && charge.period === targetPeriod
+  ));
+  if (targetMatches.length > 1) {
+    throw new Error("Já existem várias cobranças para esse mês. Não alterei nenhum dado.");
+  }
+
+  const next = charges.map((charge) => ({ ...charge, payments: (charge.payments || []).map((payment) => ({ ...payment })) }));
+  const sourceCopy = next.find((charge) => charge.id === source.id);
+  const expectedDueDate = getChargeDueDate(contract, targetPeriod);
+
+  if (!targetMatches.length) {
+    sourceCopy.period = targetPeriod;
+    sourceCopy.dueDate = expectedDueDate;
+    return { charges: next, merged: false, dueDate: expectedDueDate };
+  }
+
+  const targetCopy = next.find((charge) => charge.id === targetMatches[0].id);
+  const omit = new Set(["id", "contractId", "period", "dueDate", "payments"]);
+  const sourceTerms = Object.fromEntries(Object.entries(sourceCopy).filter(([key]) => !omit.has(key)));
+  const targetTerms = Object.fromEntries(Object.entries(targetCopy).filter(([key]) => !omit.has(key)));
+  if (stableRecordValue(sourceTerms) !== stableRecordValue(targetTerms)) {
+    throw new Error("As cobranças têm valores ou condições diferentes. Não alterei nenhum dado.");
+  }
+
+  const sourcePayments = sourceCopy.payments || [];
+  const targetPayments = targetCopy.payments || [];
+  if (!isPaymentSubset(sourcePayments, targetPayments) && !isPaymentSubset(targetPayments, sourcePayments)) {
+    throw new Error("Os históricos de pagamentos são diferentes. Não alterei nenhum dado.");
+  }
+
+  targetCopy.dueDate = expectedDueDate;
+  targetCopy.payments = isPaymentSubset(targetPayments, sourcePayments)
+    ? sourcePayments
+    : targetPayments;
+  const mergedCharges = next.filter((charge) => charge.id !== sourceCopy.id);
+  return { charges: mergedCharges, merged: true, dueDate: expectedDueDate };
+}
+
 export function rescheduleFutureCharges(charges, contract, today = toISODate(new Date())) {
   return charges.map((charge) => (
     charge.contractId === contract.id && charge.dueDate >= today
