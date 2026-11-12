@@ -76,6 +76,22 @@ export function updateChargeWithholding(charge, contract) {
   };
 }
 
+export function getChargeDueDate(contract, period) {
+  const advanceMonths = Math.max(0, Math.min(12, Math.trunc(Number(contract.paymentAdvanceMonths) || 0)));
+  const duePeriod = addMonths(`${period}-01`, -advanceMonths).slice(0, 7);
+  const { days } = periodBounds(duePeriod);
+  const dueDay = Math.min(Number(contract.paymentDueDay) || 1, days);
+  return `${duePeriod}-${String(dueDay).padStart(2, "0")}`;
+}
+
+export function rescheduleFutureCharges(charges, contract, today = toISODate(new Date())) {
+  return charges.map((charge) => (
+    charge.contractId === contract.id && charge.dueDate >= today
+      ? { ...charge, dueDate: getChargeDueDate(contract, charge.period) }
+      : charge
+  ));
+}
+
 export function getChargeStatus(charge, today = toISODate(new Date()), contract) {
   const paid = getPaidAmount(charge);
   if (paid >= getChargeNetAmount(charge, contract)) return "paid";
@@ -105,7 +121,7 @@ export function restoreContract(contract) {
 }
 
 export function createCharges(contracts, charges, period) {
-  const { start, end, days } = periodBounds(period);
+  const { start, end } = periodBounds(period);
   const byContract = new Map(
     charges.filter((charge) => charge.period === period).map((charge) => [charge.contractId, charge]),
   );
@@ -116,13 +132,12 @@ export function createCharges(contracts, charges, period) {
       continue;
     }
     if (byContract.has(contract.id)) continue;
-    const dueDay = Math.min(Number(contract.paymentDueDay) || 1, days);
     const charge = {
       id: `${contract.id}-${period}`,
       contractId: contract.id,
       period,
       amount: Number(contract.monthlyRent),
-      dueDate: `${period}-${String(dueDay).padStart(2, "0")}`,
+      dueDate: getChargeDueDate(contract, period),
       payments: [],
     };
     result.push(updateChargeWithholding(charge, contract));
@@ -131,7 +146,7 @@ export function createCharges(contracts, charges, period) {
 }
 
 export function getChargeSummary(contracts, charges, period, today = toISODate(new Date())) {
-  const monthCharges = charges.filter((charge) => charge.period === period);
+  const monthCharges = charges.filter((charge) => charge.dueDate.slice(0, 7) === period);
   const summary = {
     total: 0,
     received: 0,

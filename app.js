@@ -10,6 +10,7 @@ import {
   getPaidAmount,
   getUpcomingEvents,
   isNonResidentialProperty,
+  rescheduleFutureCharges,
   restoreContract,
   toISODate,
   updateChargeWithholding,
@@ -96,7 +97,14 @@ function saveState(message) {
 }
 
 function ensureCharges(period) {
-  const next = createCharges(state.contracts, state.charges, period);
+  const advanceMonths = Math.max(0, ...state.contracts
+    .filter((contract) => contract.status === "active")
+    .map((contract) => Number(contract.paymentAdvanceMonths) || 0));
+  let next = state.charges;
+  for (let offset = 0; offset <= advanceMonths; offset += 1) {
+    const rentPeriod = addMonths(`${period}-01`, offset).slice(0, 7);
+    next = createCharges(state.contracts, next, rentPeriod);
+  }
   if (next.length !== state.charges.length) {
     state.charges = next;
     saveState();
@@ -665,7 +673,7 @@ function renderDashboard() {
   const uncollected = state.charges
     .filter((charge) => {
       const contract = state.contracts.find((item) => item.id === charge.contractId);
-      return charge.period === currentPeriod && getChargeStatus(charge, today, contract) !== "paid";
+      return charge.dueDate.slice(0, 7) === currentPeriod && getChargeStatus(charge, today, contract) !== "paid";
     })
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
     .slice(0, 4);
@@ -835,13 +843,13 @@ function renderContracts() {
 function renderPayments() {
   ensureCharges(selectedPeriod);
   const charges = state.charges
-    .filter((charge) => charge.period === selectedPeriod)
+    .filter((charge) => charge.dueDate.slice(0, 7) === selectedPeriod)
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
   const summary = getChargeSummary(state.contracts, state.charges, selectedPeriod, today);
   return `
     <section class="page-heading">
       <div><p class="eyebrow">CONTROLO DE RENDAS</p><h1>Rendas e pagamentos</h1><p class="heading-subtitle">Para lojas e escritórios, registe o valor líquido que o inquilino paga (75% da renda bruta).</p></div>
-      <label class="period-picker"><span>Período</span><input type="month" value="${escapeHtml(selectedPeriod)}" data-period></label>
+      <label class="period-picker"><span>Mês de pagamento</span><input type="month" value="${escapeHtml(selectedPeriod)}" data-period></label>
     </section>
     <section class="payment-summary-grid">
       <article class="summary-tile"><span>Previsto líquido</span><strong>${money.format(summary.total)}</strong><small>${summary.chargeCount} rendas</small></article>
@@ -849,8 +857,8 @@ function renderPayments() {
       <article class="summary-tile"><span>Em falta</span><strong class="summary-orange">${money.format(summary.missing)}</strong><small>${summary.overdueCount} em atraso</small></article>
     </section>
     ${charges.length ? `<section class="panel table-panel payment-table-panel">
-      <div class="table-toolbar"><div><strong>Cobranças de ${escapeHtml(formatMonth(selectedPeriod))}</strong><span>Os valores só mudam quando regista um pagamento.</span></div></div>
-      <div class="table-scroll"><table><thead><tr><th>Imóvel / arrendatário</th><th>Vencimento</th><th>Valor a pagar</th><th>Recebido</th><th>Em falta</th><th>Estado</th><th><span class="sr-only">Ação</span></th></tr></thead><tbody>
+      <div class="table-toolbar"><div><strong>Rendas a pagar em ${escapeHtml(formatMonth(selectedPeriod))}</strong><span>O mês da renda pode ser anterior ou posterior ao mês de pagamento.</span></div></div>
+      <div class="table-scroll"><table><thead><tr><th>Imóvel / arrendatário</th><th>Mês da renda</th><th>Vencimento</th><th>Valor a pagar</th><th>Recebido</th><th>Em falta</th><th>Estado</th><th><span class="sr-only">Ação</span></th></tr></thead><tbody>
       ${charges.map((charge) => {
         const contract = state.contracts.find((item) => item.id === charge.contractId);
         const property = propertyForContract(charge.contractId);
@@ -862,10 +870,10 @@ function renderPayments() {
         const rent = withholdingAmount
           ? `<strong>${money.format(netAmount)}</strong><span>Líquido a pagar</span><span>Renda bruta · ${money.format(charge.amount)}</span><span>Retenção (25%) · ${money.format(withholdingAmount)}</span>`
           : `<strong>${money.format(netAmount)}</strong>`;
-        return `<tr><td><strong>${escapeHtml(property?.name || "Imóvel")}</strong><span>${escapeHtml(contract?.tenantName || "")}</span></td><td>${formatDate(charge.dueDate)}</td><td>${rent}</td><td>${money.format(paid)}${charge.payments?.length ? `<span>Último · ${formatDate(charge.payments[charge.payments.length - 1].date)}</span>` : ""}</td><td><strong>${money.format(balance)}</strong></td><td><span class="status-badge ${statusClass(status)}">${statusLabel(status)}</span></td><td>${balance > 0 ? `<button class="button button-secondary button-small" type="button" data-action="register-payment" data-id="${escapeHtml(charge.id)}">Registar pagamento</button>` : '<span class="paid-check" aria-label="Totalmente recebida">✓</span>'}</td></tr>`;
+        return `<tr><td><strong>${escapeHtml(property?.name || "Imóvel")}</strong><span>${escapeHtml(contract?.tenantName || "")}</span></td><td>${formatMonth(charge.period)}</td><td>${formatDate(charge.dueDate)}</td><td>${rent}</td><td>${money.format(paid)}${charge.payments?.length ? `<span>Último · ${formatDate(charge.payments[charge.payments.length - 1].date)}</span>` : ""}</td><td><strong>${money.format(balance)}</strong></td><td><span class="status-badge ${statusClass(status)}">${statusLabel(status)}</span></td><td>${balance > 0 ? `<button class="button button-secondary button-small" type="button" data-action="register-payment" data-id="${escapeHtml(charge.id)}">Registar pagamento</button>` : '<span class="paid-check" aria-label="Totalmente recebida">✓</span>'}</td></tr>`;
       }).join("")}
       </tbody></table></div>
-    </section>` : `<section class="empty-state page-empty"><span class="empty-icon">€</span><h2>Sem cobranças neste período</h2><p>Não há contratos ativos a cobrar neste mês. Pode selecionar outro período ou adicionar um contrato.</p><button class="button button-primary" type="button" data-action="new-contract">Adicionar contrato</button></section>`}
+    </section>` : `<section class="empty-state page-empty"><span class="empty-icon">€</span><h2>Sem rendas a pagar neste mês</h2><p>Não há cobranças com vencimento neste período. Pode selecionar outro mês ou adicionar um contrato.</p><button class="button button-primary" type="button" data-action="new-contract">Adicionar contrato</button></section>`}
     <p class="privacy-note"><span aria-hidden="true">ⓘ</span> ${authUser ? "Os registos são privados da sua conta Supabase e sincronizados entre dispositivos." : "Os registos são mantidos apenas neste navegador. A aplicação não liga a bancos nem processa pagamentos."}</p>`;
 }
 
@@ -986,6 +994,7 @@ function openContractForm(contract, preferredPropertyId) {
         <label class="form-field">Fim do contrato<input name="endDate" type="date" value="${escapeHtml(contract?.endDate || "")}"></label>
         <label class="form-field">Próxima atualização anual<input name="adjustmentDate" type="date" value="${escapeHtml(contract?.adjustmentDate || "")}"><small>O lembrete será agendado dois meses antes.</small></label>
         <label class="form-field">Dia de vencimento da renda<input name="paymentDueDay" type="number" required min="1" max="31" value="${escapeHtml(contract?.paymentDueDay ?? 8)}"></label>
+        <label class="form-field">Antecedência do pagamento (meses)<input name="paymentAdvanceMonths" type="number" required min="0" max="12" step="1" value="${escapeHtml(contract?.paymentAdvanceMonths ?? 0)}"><small>0 = no mês da renda; 1 = no mês anterior. Aplica-se também às cobranças futuras já criadas.</small></label>
         ${contract?.status === "archived"
           ? '<div class="form-field"><span>Estado</span><span class="status-badge status-neutral">Arquivado</span></div>'
           : `<label class="form-field">Estado<select name="status"><option value="active" ${contract?.status !== "ended" ? "selected" : ""}>Ativo</option><option value="ended" ${contract?.status === "ended" ? "selected" : ""}>Terminado</option></select></label>`}
@@ -1248,6 +1257,10 @@ document.addEventListener("submit", async (event) => {
     const selectedProperty = state.properties.find((property) => property.id === values.propertyId);
     const nonResidential = values.nonResidential === "true" || isNonResidentialProperty(selectedProperty);
     const nonResidentialChanged = Boolean(existing && existing.nonResidential !== nonResidential);
+    const scheduleChanged = Boolean(existing && (
+      Number(existing.paymentAdvanceMonths) !== Number(values.paymentAdvanceMonths)
+      || Number(existing.paymentDueDay) !== Number(values.paymentDueDay)
+    ));
     const contract = {
       id: existing?.id || `c-${crypto.randomUUID()}`,
       propertyId: values.propertyId,
@@ -1259,6 +1272,7 @@ document.addEventListener("submit", async (event) => {
       endDate: values.endDate,
       adjustmentDate: values.adjustmentDate,
       paymentDueDay: Number(values.paymentDueDay),
+      paymentAdvanceMonths: Number(values.paymentAdvanceMonths),
       status: existing?.status === "archived" ? "archived" : values.status,
       statusBeforeArchive: existing?.statusBeforeArchive ?? null,
       archivedAt: existing?.archivedAt ?? null,
@@ -1269,6 +1283,9 @@ document.addEventListener("submit", async (event) => {
     };
     if (existing) Object.assign(existing, contract);
     else state.contracts.push(contract);
+    if (scheduleChanged) {
+      state.charges = rescheduleFutureCharges(state.charges, contract, today);
+    }
     if (nonResidentialChanged) {
       state.charges = state.charges.map((charge) => (
         charge.contractId === contract.id

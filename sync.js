@@ -15,6 +15,7 @@ export function normalizeData(data) {
     statusBeforeArchive: contract.statusBeforeArchive ?? null,
     archivedAt: contract.archivedAt ?? null,
     nonResidential: Boolean(contract.nonResidential || nonResidentialPropertyIds.has(contract.propertyId)),
+    paymentAdvanceMonths: Math.max(0, Math.min(12, Math.trunc(Number(contract.paymentAdvanceMonths) || 0))),
   }));
   const contractsById = new Map(normalized.contracts.map((contract) => [contract.id, contract]));
   normalized.charges = normalized.charges.map((charge) => {

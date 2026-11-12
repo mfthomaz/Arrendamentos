@@ -8,7 +8,9 @@ import {
   getChargeStatus,
   getChargeSummary,
   getChargeWithholding,
+  getChargeDueDate,
   getUpcomingEvents,
+  rescheduleFutureCharges,
   restoreContract,
   updateChargeWithholding,
 } from "../domain.js";
@@ -202,4 +204,60 @@ test("changing a contract's use recalculates charge retention without changing g
     withholdingAmount: 0,
     netAmount: 1200,
   });
+});
+
+test("rent due one month in advance is listed in the payment month", () => {
+  const contract = {
+    id: "c-linda-velha",
+    status: "active",
+    startDate: "2027-01-01",
+    monthlyRent: 1000,
+    paymentDueDay: 8,
+    paymentAdvanceMonths: 1,
+  };
+  const januaryRent = createCharges([contract], [], "2027-01")[0];
+  const decemberSummary = getChargeSummary(
+    [contract],
+    [januaryRent],
+    "2026-12",
+    "2026-12-01",
+  );
+
+  assert.equal(getChargeDueDate(contract, "2027-01"), "2026-12-08");
+  assert.equal(januaryRent.period, "2027-01");
+  assert.equal(decemberSummary.chargeCount, 1);
+  assert.equal(decemberSummary.total, 1000);
+  assert.equal(decemberSummary.missing, 1000);
+});
+
+test("rent due in the same month retains its normal due date", () => {
+  const contract = {
+    id: "c-aveiro",
+    status: "active",
+    startDate: "2027-01-01",
+    monthlyRent: 800,
+    paymentDueDay: 8,
+    paymentAdvanceMonths: 0,
+  };
+  const januaryRent = createCharges([contract], [], "2027-01")[0];
+
+  assert.equal(januaryRent.dueDate, "2027-01-08");
+  assert.equal(getChargeSummary([contract], [januaryRent], "2027-01").total, 800);
+});
+
+test("rescheduling changes future due dates and preserves past dates and payments", () => {
+  const contract = {
+    id: "c-1",
+    paymentDueDay: 8,
+    paymentAdvanceMonths: 1,
+  };
+  const charges = [
+    { id: "future", contractId: "c-1", period: "2027-01", dueDate: "2027-01-08", payments: [] },
+    { id: "past", contractId: "c-1", period: "2026-11", dueDate: "2026-11-08", payments: [{ amount: 500 }] },
+  ];
+  const rescheduled = rescheduleFutureCharges(charges, contract, "2026-12-01");
+
+  assert.equal(rescheduled[0].dueDate, "2026-12-08");
+  assert.equal(rescheduled[1].dueDate, "2026-11-08");
+  assert.deepEqual(rescheduled[1].payments, [{ amount: 500 }]);
 });
