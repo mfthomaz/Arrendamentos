@@ -18,6 +18,7 @@ import {
   updateUnpaidCharges,
 } from "./domain.js";
 import {
+  cloneData,
   createSupabaseClient,
   emptyData,
   hasRecords,
@@ -52,6 +53,7 @@ let toastTimer;
 let authSession = null;
 let authUser = null;
 let remoteRevision = null;
+let syncBaseData = null;
 let cloudStatus = supabase ? "signed-out" : "local";
 let migrationChoice = null;
 let syncTimer;
@@ -162,7 +164,13 @@ function readAccountCache(userId) {
     if (!saved?.data || !Array.isArray(saved.data.properties) || !Array.isArray(saved.data.contracts) || !Array.isArray(saved.data.charges)) {
       return null;
     }
-    return { data: normalizeData(saved.data), pending: Boolean(saved.pending) };
+    const baseData = saved.baseData
+      && Array.isArray(saved.baseData.properties)
+      && Array.isArray(saved.baseData.contracts)
+      && Array.isArray(saved.baseData.charges)
+      ? normalizeData(saved.baseData)
+      : null;
+    return { data: normalizeData(saved.data), baseData, pending: Boolean(saved.pending) };
   } catch {
     return null;
   }
@@ -170,7 +178,11 @@ function readAccountCache(userId) {
 
 function persistAccountCache(pending = false) {
   if (!authUser) return;
-  localStorage.setItem(userDataKey(authUser.id), JSON.stringify({ data: state, pending }));
+  localStorage.setItem(userDataKey(authUser.id), JSON.stringify({
+    data: state,
+    pending,
+    baseData: syncBaseData ? cloneData(syncBaseData) : null,
+  }));
 }
 
 function setCloudStatus(status, detail = "") {
@@ -354,6 +366,7 @@ async function startCloudSync() {
     if (!navigator.onLine && savedSession?.user?.id && localCache) {
       storeSession(savedSession);
       state = localCache.data;
+      syncBaseData = localCache.baseData;
       document.body.classList.remove("auth-required");
       document.querySelector(".sidebar").hidden = false;
       render();
@@ -387,22 +400,26 @@ async function loadUserData() {
   if (remote) {
     remoteRevision = Number(remote.revision);
     if (localCache?.pending) {
-      const merged = mergeSnapshots(remote.data, localCache.data);
+      const merged = mergeSnapshots(remote.data, localCache.data, localCache.baseData);
       state = merged.data;
       pendingConflictCount = merged.conflicts;
+      syncBaseData = cloneData(remote.data);
       persistAccountCache(true);
       queueCloudSync();
     } else {
       state = parseData(remote.data, "Os dados da conta");
+      syncBaseData = cloneData(remote.data);
       persistAccountCache(false);
     }
   } else if (localCache && (localCache.pending || hasRecords(localCache.data))) {
     state = parseData(localCache.data, "Os dados pendentes");
+    syncBaseData = localCache.baseData || emptyData();
     remoteRevision = null;
     persistAccountCache(true);
     queueCloudSync();
   } else {
     state = emptyData();
+    syncBaseData = emptyData();
     remoteRevision = null;
     persistAccountCache(false);
     setCloudStatus("synced");
@@ -421,6 +438,7 @@ async function finishMigration(importLocal) {
   localStorage.setItem(`casathomaz.migration-backup.${userId}`, JSON.stringify(local));
   localStorage.setItem(LEGACY_OWNER_KEY, userId);
   remoteRevision = remote ? Number(remote.revision) : null;
+  syncBaseData = cloneData(remote?.data || emptyData());
   if (importLocal) {
     const merged = mergeSnapshots(remote?.data || emptyData(), local);
     state = merged.data;
@@ -470,6 +488,7 @@ async function syncNow() {
             const inserted = await supabase.insertOwnerData(session, authUser.id, payload);
             if (inserted) {
               remoteRevision = Number(inserted.revision);
+              syncBaseData = cloneData(payload);
               if (JSON.stringify(state) !== JSON.stringify(payload)) {
                 persistAccountCache(true);
                 continue;
@@ -487,8 +506,9 @@ async function syncNow() {
           const current = await supabase.getOwnerData(session, authUser.id);
           if (!current) throw new Error("Não foi possível criar nem carregar a carteira sincronizada.");
           remoteRevision = Number(current.revision);
-          const merged = mergeSnapshots(current.data, state);
+          const merged = mergeSnapshots(current.data, state, syncBaseData);
           state = merged.data;
+          syncBaseData = cloneData(current.data);
           pendingConflictCount += merged.conflicts;
           persistAccountCache(true);
           continue;
@@ -497,6 +517,7 @@ async function syncNow() {
         const updated = await supabase.updateOwnerData(session, authUser.id, remoteRevision, payload);
         if (updated) {
           remoteRevision = Number(updated.revision);
+          syncBaseData = cloneData(payload);
           if (JSON.stringify(state) !== JSON.stringify(payload)) {
             persistAccountCache(true);
             continue;
@@ -514,8 +535,9 @@ async function syncNow() {
           continue;
         }
         remoteRevision = Number(current.revision);
-        const merged = mergeSnapshots(current.data, state);
+        const merged = mergeSnapshots(current.data, state, syncBaseData);
         state = merged.data;
+        syncBaseData = cloneData(current.data);
         pendingConflictCount += merged.conflicts;
         persistAccountCache(true);
         render();
@@ -558,9 +580,10 @@ async function checkRemoteChanges() {
       return;
     }
     if (cache?.pending) {
-      const merged = mergeSnapshots(remote.data, state);
+      const merged = mergeSnapshots(remote.data, state, syncBaseData || cache.baseData);
       state = merged.data;
       remoteRevision = Number(remote.revision);
+      syncBaseData = cloneData(remote.data);
       pendingConflictCount += merged.conflicts;
       persistAccountCache(true);
       render();
@@ -569,6 +592,7 @@ async function checkRemoteChanges() {
     }
     state = parseData(remote.data, "Os dados da conta");
     remoteRevision = Number(remote.revision);
+    syncBaseData = cloneData(remote.data);
     persistAccountCache(false);
     render();
     setCloudStatus("synced");

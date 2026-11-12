@@ -53,6 +53,68 @@ test("conflicting local records are preserved as copies with linked contracts an
   assert.notEqual(localCharge.id, "charge-1");
 });
 
+test("a local property edit updates the shared record without duplicating linked records", () => {
+  const base = {
+    properties: [{ id: "p-1", name: "Apartamento", address: "Rua antiga" }],
+    contracts: [{ id: "c-1", propertyId: "p-1", tenantName: "João" }],
+    charges: [{ id: "charge-1", contractId: "c-1", amount: 800, payments: [] }],
+  };
+  const local = structuredClone(base);
+  local.properties[0].address = "Rua nova";
+
+  const result = mergeSnapshots(base, local, base);
+
+  assert.equal(result.conflicts, 0);
+  assert.deepEqual(result.data.properties, [{ ...base.properties[0], address: "Rua nova" }]);
+  assert.deepEqual(result.data.contracts, base.contracts);
+  assert.deepEqual(result.data.charges, base.charges);
+});
+
+test("independent edits to the same record merge without creating a conflict copy", () => {
+  const base = {
+    properties: [{ id: "p-1", name: "Apartamento", address: "Rua antiga", notes: "" }],
+    contracts: [],
+    charges: [],
+  };
+  const remote = structuredClone(base);
+  const local = structuredClone(base);
+  remote.properties[0].notes = "Tem garagem";
+  local.properties[0].address = "Rua nova";
+
+  const result = mergeSnapshots(remote, local, base);
+
+  assert.equal(result.conflicts, 0);
+  assert.deepEqual(result.data.properties, [{
+    id: "p-1",
+    name: "Apartamento",
+    address: "Rua nova",
+    notes: "Tem garagem",
+  }]);
+});
+
+test("simultaneous conflicting edits remain preserved as linked copies", () => {
+  const base = {
+    properties: [{ id: "p-1", name: "Apartamento", address: "Rua antiga" }],
+    contracts: [{ id: "c-1", propertyId: "p-1", tenantName: "João" }],
+    charges: [{ id: "charge-1", contractId: "c-1", amount: 800, payments: [] }],
+  };
+  const remote = structuredClone(base);
+  const local = structuredClone(base);
+  remote.properties[0].address = "Rua A";
+  local.properties[0].address = "Rua B";
+
+  const result = mergeSnapshots(remote, local, base);
+
+  assert.equal(result.conflicts, 3);
+  assert.equal(result.data.properties.length, 2);
+  const localProperty = result.data.properties.find((record) => record.address === "Rua B");
+  const localContract = result.data.contracts.find((record) => record.propertyId === localProperty.id);
+  const localCharge = result.data.charges.find((record) => record.contractId === localContract.id);
+  assert.ok(localProperty.id !== "p-1");
+  assert.ok(localContract.id !== "c-1");
+  assert.ok(localCharge.id !== "charge-1");
+});
+
 test("legacy contracts receive default archive fields without changing existing records", () => {
   const legacy = {
     properties: [{ id: "p-1", name: "Casa" }],

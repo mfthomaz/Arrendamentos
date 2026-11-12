@@ -29,6 +29,10 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+export function cloneData(data) {
+  return clone(normalizeData(data));
+}
+
 function stableValue(value) {
   if (Array.isArray(value)) return `[${value.map(stableValue).join(",")}]`;
   if (value && typeof value === "object") {
@@ -37,16 +41,109 @@ function stableValue(value) {
   return JSON.stringify(value);
 }
 
+function mergeRecordFields(baseRecord, remoteRecord, localRecord) {
+  const merged = {};
+  const fields = new Set([
+    ...Object.keys(baseRecord || {}),
+    ...Object.keys(remoteRecord || {}),
+    ...Object.keys(localRecord || {}),
+  ]);
+  for (const field of fields) {
+    const baseValue = baseRecord?.[field];
+    const remoteValue = remoteRecord?.[field];
+    const localValue = localRecord?.[field];
+    const remoteChanged = stableValue(remoteValue) !== stableValue(baseValue);
+    const localChanged = stableValue(localValue) !== stableValue(baseValue);
+    if (remoteChanged && localChanged && stableValue(remoteValue) !== stableValue(localValue)) {
+      return null;
+    }
+    const value = localChanged ? localValue : remoteChanged ? remoteValue : baseValue;
+    if (value !== undefined) merged[field] = value;
+  }
+  return merged;
+}
+
 function newImportedId(id) {
   return `${id}-import-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-function mergeRecords(remoteRecords, localRecords, relationshipMap = {}, relationshipField = "") {
-  const result = clone(remoteRecords || []);
-  const remoteById = new Map(result.map((record) => [record.id, record]));
+function mergeRecords(remoteRecords, localRecords, baseRecords = null, relationshipMap = {}, relationshipField = "") {
+  const remote = clone(remoteRecords || []);
+  const remoteById = new Map(remote.map((record) => [record.id, record]));
   const idMap = new Map();
   let conflicts = 0;
 
+  if (baseRecords) {
+    const localById = new Map();
+    const remappedRelationships = new Set();
+    for (const localRecord of localRecords || []) {
+      const record = clone(localRecord);
+      if (relationshipField && relationshipMap.has(record[relationshipField])) {
+        record[relationshipField] = relationshipMap.get(record[relationshipField]);
+        remappedRelationships.add(record.id);
+      }
+      localById.set(record.id, record);
+    }
+    const baseById = new Map((baseRecords || []).map((record) => [record.id, record]));
+    const ids = new Set([...remoteById.keys(), ...localById.keys(), ...baseById.keys()]);
+    const result = [];
+
+    for (const id of ids) {
+      const remoteRecord = remoteById.get(id);
+      const localRecord = localById.get(id);
+      const baseRecord = baseById.get(id);
+
+      if (remappedRelationships.has(id) && remoteRecord && localRecord) {
+        result.push(remoteRecord);
+        const copy = clone(localRecord);
+        copy.id = newImportedId(copy.id);
+        idMap.set(id, copy.id);
+        result.push(copy);
+        conflicts += 1;
+        continue;
+      }
+
+      const remoteChanged = stableValue(remoteRecord) !== stableValue(baseRecord);
+      const localChanged = stableValue(localRecord) !== stableValue(baseRecord);
+      if (!localChanged) {
+        if (remoteRecord) result.push(remoteRecord);
+        continue;
+      }
+      if (!remoteChanged) {
+        if (localRecord) result.push(localRecord);
+        continue;
+      }
+      if (stableValue(remoteRecord) === stableValue(localRecord)) {
+        if (remoteRecord) result.push(remoteRecord);
+        continue;
+      }
+      if (remoteRecord && localRecord && baseRecord) {
+        const mergedRecord = mergeRecordFields(baseRecord, remoteRecord, localRecord);
+        if (mergedRecord) {
+          result.push(mergedRecord);
+          continue;
+        }
+      }
+      if (remoteRecord) result.push(remoteRecord);
+      if (localRecord) {
+        if (!remoteRecord) {
+          result.push(localRecord);
+        } else {
+          const copy = clone(localRecord);
+          copy.id = newImportedId(copy.id);
+          idMap.set(id, copy.id);
+          result.push(copy);
+          conflicts += 1;
+        }
+      } else {
+        conflicts += 1;
+      }
+    }
+
+    return { records: result, idMap, conflicts };
+  }
+
+  const result = remote;
   for (const localRecord of localRecords || []) {
     const record = clone(localRecord);
     if (relationshipField && relationshipMap.has(record[relationshipField])) {
@@ -71,12 +168,13 @@ function mergeRecords(remoteRecords, localRecords, relationshipMap = {}, relatio
   return { records: result, idMap, conflicts };
 }
 
-export function mergeSnapshots(remoteData, localData) {
+export function mergeSnapshots(remoteData, localData, baseData = null) {
   const remote = normalizeData(remoteData);
   const local = normalizeData(localData);
-  const properties = mergeRecords(remote.properties, local.properties);
-  const contracts = mergeRecords(remote.contracts, local.contracts, properties.idMap, "propertyId");
-  const charges = mergeRecords(remote.charges, local.charges, contracts.idMap, "contractId");
+  const base = baseData ? normalizeData(baseData) : null;
+  const properties = mergeRecords(remote.properties, local.properties, base?.properties);
+  const contracts = mergeRecords(remote.contracts, local.contracts, base?.contracts, properties.idMap, "propertyId");
+  const charges = mergeRecords(remote.charges, local.charges, base?.charges, contracts.idMap, "contractId");
 
   return {
     data: {
