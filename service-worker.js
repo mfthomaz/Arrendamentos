@@ -1,4 +1,4 @@
-const CACHE_NAME = "casathomaz-shell-v6";
+const CACHE_NAME = "casathomaz-shell-v7";
 const BASE_URL = self.registration.scope;
 const SHELL_FILES = [
   "./",
