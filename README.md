@@ -16,7 +16,9 @@ Ao criar ou editar um contrato, indique a finalidade **Não habitacional / empre
 
 ## Antecedência do pagamento das rendas
 
-Cada contrato permite indicar quantos meses antes do mês da renda esta deve ser paga (0–12). Por exemplo, com antecedência de 1 mês e vencimento no dia 8, a renda de janeiro de 2027 vence a 8 de dezembro de 2026. **Rendas e pagamentos** é organizado pelo mês de pagamento e mostra também o mês a que cada renda corresponde. Ao editar a antecedência, as cobranças futuras são reprogramadas; datas e pagamentos passados são preservados. Os contratos existentes usam por omissão 0 meses.
+Cada contrato permite indicar quantos meses antes do mês da renda esta deve ser paga (0–12). Por exemplo, com antecedência de 1 mês e vencimento no dia 8, a renda de janeiro de 2027 vence a 8 de dezembro de 2026. **Rendas e pagamentos** é organizado pelo mês de pagamento e mostra também o mês a que cada renda corresponde. O padrão de novos contratos é 1 mês; escolha 0 quando o pagamento for no próprio mês da renda. Ao editar a antecedência, as cobranças futuras são reprogramadas; datas e pagamentos passados são preservados. Os contratos existentes mantêm o valor que já tinham.
+
+Se uma cobrança tiver sido associada ao mês da renda errado, edite primeiro o contrato e confirme a antecedência; depois, em **Rendas e pagamentos**, use **Corrigir mês da renda** na cobrança incorreta. A confirmação mostra a cobrança que será movida. Se já existir uma cobrança desse mês, a aplicação só as reúne quando valores e pagamentos puderem ser conciliados sem duplicar ou perder histórico; caso contrário, não altera dados.
 
 Ao guardar um contrato ativo, as cobranças do mês atual e dos meses seguintes sem pagamentos registados são atualizadas para a renda mensal atual do contrato. Períodos anteriores e cobranças com pagamentos são mantidos como histórico.
 

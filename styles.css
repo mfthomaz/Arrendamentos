@@ -97,6 +97,8 @@ a { color: inherit; text-decoration: none; }
 .payment-records { display: grid; gap: 5px; margin-top: 6px; }
 .payment-record { display: flex; align-items: center; justify-content: space-between; gap: 9px; color: var(--muted); font-size: 10px; white-space: nowrap; }
 .payment-delete-button { color: var(--red); font-size: 10px; }
+.charge-actions { display: grid; justify-items: start; gap: 8px; }
+.charge-actions .text-button { font-size: 9px; }
 .payment-delete-button:hover { color: var(--red-dark, #98483f); }
 .icon-button { width: 32px; height: 32px; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: white; color: var(--green); cursor: pointer; }
 .icon-button:hover { background: var(--green-soft); }

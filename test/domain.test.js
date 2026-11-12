@@ -12,6 +12,7 @@ import {
   getUpcomingEvents,
   getPaidAmount,
   removePayment,
+  reclassifyChargePeriod,
   rescheduleFutureCharges,
   restoreContract,
   updateChargeWithholding,
@@ -301,6 +302,60 @@ test("rent due in the same month retains its normal due date", () => {
 
   assert.equal(januaryRent.dueDate, "2027-01-08");
   assert.equal(getChargeSummary([contract], [januaryRent], "2027-01").total, 800);
+});
+
+test("reclassifying a rent month recomputes its due date and preserves payments", () => {
+  const contract = { id: "c-1", paymentDueDay: 8, paymentAdvanceMonths: 1 };
+  const charges = [{
+    id: "charge-nov",
+    contractId: "c-1",
+    period: "2026-11",
+    amount: 900,
+    dueDate: "2026-11-08",
+    payments: [{ amount: 900, date: "2026-11-12" }],
+  }];
+
+  const result = reclassifyChargePeriod(charges, contract, "charge-nov", "2026-12");
+
+  assert.equal(result.merged, false);
+  assert.equal(result.charges.length, 1);
+  assert.equal(result.charges[0].period, "2026-12");
+  assert.equal(result.charges[0].dueDate, "2026-11-08");
+  assert.deepEqual(result.charges[0].payments, [{ amount: 900, date: "2026-11-12" }]);
+  assert.equal(charges[0].period, "2026-11");
+});
+
+test("reclassifying merges compatible duplicate rent entries without duplicating payments", () => {
+  const contract = { id: "c-1", paymentDueDay: 8, paymentAdvanceMonths: 1 };
+  const sharedPayment = { amount: 900, date: "2026-11-12" };
+  const charges = [
+    { id: "charge-nov", contractId: "c-1", period: "2026-11", amount: 900, dueDate: "2026-11-08", payments: [sharedPayment] },
+    { id: "charge-dec", contractId: "c-1", period: "2026-12", amount: 900, dueDate: "2026-12-08", payments: [sharedPayment] },
+  ];
+
+  const result = reclassifyChargePeriod(charges, contract, "charge-nov", "2026-12");
+
+  assert.equal(result.merged, true);
+  assert.equal(result.charges.length, 1);
+  assert.equal(result.charges[0].id, "charge-dec");
+  assert.equal(result.charges[0].period, "2026-12");
+  assert.equal(result.charges[0].dueDate, "2026-11-08");
+  assert.deepEqual(result.charges[0].payments, [sharedPayment]);
+});
+
+test("reclassifying refuses incompatible payment histories without changing data", () => {
+  const contract = { id: "c-1", paymentDueDay: 8, paymentAdvanceMonths: 1 };
+  const charges = [
+    { id: "charge-nov", contractId: "c-1", period: "2026-11", amount: 900, dueDate: "2026-11-08", payments: [{ amount: 700, date: "2026-11-12" }] },
+    { id: "charge-dec", contractId: "c-1", period: "2026-12", amount: 900, dueDate: "2026-11-08", payments: [{ amount: 200, date: "2026-11-12" }] },
+  ];
+  const original = JSON.stringify(charges);
+
+  assert.throws(
+    () => reclassifyChargePeriod(charges, contract, "charge-nov", "2026-12"),
+    /históricos de pagamentos/,
+  );
+  assert.equal(JSON.stringify(charges), original);
 });
 
 test("rescheduling changes future due dates and preserves past dates and payments", () => {

@@ -11,6 +11,7 @@ import {
   getUpcomingEvents,
   isNonResidentialProperty,
   removePayment,
+  reclassifyChargePeriod,
   rescheduleFutureCharges,
   restoreContract,
   toISODate,
@@ -894,7 +895,7 @@ function renderPayments() {
       <article class="summary-tile"><span>Em falta</span><strong class="summary-orange">${money.format(summary.missing)}</strong><small>${summary.overdueCount} em atraso</small></article>
     </section>
     ${charges.length ? `<section class="panel table-panel payment-table-panel">
-      <div class="table-toolbar"><div><strong>Rendas a pagar em ${escapeHtml(formatMonth(selectedPeriod))}</strong><span>O mês da renda pode ser anterior ou posterior ao mês de pagamento.</span></div></div>
+      <div class="table-toolbar"><div><strong>Rendas a pagar em ${escapeHtml(formatMonth(selectedPeriod))}</strong><span>O mês da renda pode ser diferente do mês do pagamento. Use “Corrigir mês da renda” se associou uma cobrança ao mês errado.</span></div></div>
       <div class="table-scroll"><table><thead><tr><th>Imóvel / arrendatário</th><th>Mês da renda</th><th>Vencimento</th><th>Valor a pagar</th><th>Recebido</th><th>Em falta</th><th>Estado</th><th><span class="sr-only">Ação</span></th></tr></thead><tbody>
       ${charges.map((charge) => {
         const contract = state.contracts.find((item) => item.id === charge.contractId);
@@ -909,7 +910,10 @@ function renderPayments() {
           : `<strong>${money.format(netAmount)}</strong>`;
         const payments = charge.payments || [];
         const received = `<strong>${money.format(paid)}</strong>${payments.length ? `<div class="payment-records">${payments.map((payment, paymentIndex) => `<div class="payment-record"><span>${money.format(payment.amount)} · ${formatDate(payment.date)}</span><button class="text-button payment-delete-button" type="button" data-action="delete-payment" data-id="${escapeHtml(charge.id)}" data-payment-index="${paymentIndex}" aria-label="Eliminar pagamento de ${money.format(payment.amount)} de ${escapeHtml(formatDate(payment.date))}">Eliminar</button></div>`).join("")}</div>` : ""}`;
-        return `<tr><td data-label="Imóvel / arrendatário"><strong>${escapeHtml(property?.name || "Imóvel")}</strong><span>${escapeHtml(contract?.tenantName || "")}</span></td><td data-label="Mês da renda">${formatMonth(charge.period)}</td><td data-label="Vencimento">${formatDate(charge.dueDate)}</td><td data-label="Valor a pagar">${rent}</td><td data-label="Recebido">${received}</td><td data-label="Em falta"><strong>${money.format(balance)}</strong></td><td data-label="Estado"><span class="status-badge ${statusClass(status)}">${statusLabel(status)}</span></td><td data-label="Ação">${balance > 0 ? `<button class="button button-secondary button-small" type="button" data-action="register-payment" data-id="${escapeHtml(charge.id)}">Registar pagamento</button>` : '<span class="paid-check" aria-label="Totalmente recebida">✓</span>'}</td></tr>`;
+        const periodCorrection = charge.period === selectedPeriod
+          ? `<button class="text-button" type="button" data-action="change-charge-period" data-id="${escapeHtml(charge.id)}">Corrigir mês da renda</button>`
+          : "";
+        return `<tr><td data-label="Imóvel / arrendatário"><strong>${escapeHtml(property?.name || "Imóvel")}</strong><span>${escapeHtml(contract?.tenantName || "")}</span></td><td data-label="Mês da renda">${formatMonth(charge.period)}</td><td data-label="Vencimento">${formatDate(charge.dueDate)}</td><td data-label="Valor a pagar">${rent}</td><td data-label="Recebido">${received}</td><td data-label="Em falta"><strong>${money.format(balance)}</strong></td><td data-label="Estado"><span class="status-badge ${statusClass(status)}">${statusLabel(status)}</span></td><td data-label="Ação"><div class="charge-actions">${periodCorrection}${balance > 0 ? `<button class="button button-secondary button-small" type="button" data-action="register-payment" data-id="${escapeHtml(charge.id)}">Registar pagamento</button>` : '<span class="paid-check" aria-label="Totalmente recebida">✓</span>'}</div></td></tr>`;
       }).join("")}
       </tbody></table></div>
     </section>` : `<section class="empty-state page-empty"><span class="empty-icon">€</span><h2>Sem rendas a pagar neste mês</h2><p>Não há cobranças com vencimento neste período. Pode selecionar outro mês ou adicionar um contrato.</p><button class="button button-primary" type="button" data-action="new-contract">Adicionar contrato</button></section>`}
@@ -1067,7 +1071,7 @@ function openContractForm(contract, preferredPropertyId) {
         <label class="form-field">Fim do contrato<input name="endDate" type="date" value="${escapeHtml(contract?.endDate || "")}"></label>
         <label class="form-field">Próxima atualização anual<input name="adjustmentDate" type="date" value="${escapeHtml(contract?.adjustmentDate || "")}"><small>O lembrete será agendado dois meses antes.</small></label>
         <label class="form-field">Dia de vencimento da renda<input name="paymentDueDay" type="number" required min="1" max="31" value="${escapeHtml(contract?.paymentDueDay ?? 8)}"></label>
-        <label class="form-field">Antecedência do pagamento (meses)<input name="paymentAdvanceMonths" type="number" required min="0" max="12" step="1" value="${escapeHtml(contract?.paymentAdvanceMonths ?? 0)}"><small>0 = no mês da renda; 1 = no mês anterior. Aplica-se também às cobranças futuras já criadas.</small></label>
+        <label class="form-field">Antecedência do pagamento (meses)<input name="paymentAdvanceMonths" type="number" required min="0" max="12" step="1" value="${escapeHtml(contract?.paymentAdvanceMonths ?? 1)}"><small>1 = renda vence no mês anterior; 0 = vence no mês da renda. O padrão para novos contratos é 1 mês.</small></label>
         ${contract?.status === "archived"
           ? '<div class="form-field"><span>Estado</span><span class="status-badge status-neutral">Arquivado</span></div>'
           : `<label class="form-field">Estado<select name="status"><option value="active" ${contract?.status !== "ended" ? "selected" : ""}>Ativo</option><option value="ended" ${contract?.status === "ended" ? "selected" : ""}>Terminado</option></select></label>`}
@@ -1102,6 +1106,42 @@ function openPaymentForm(charge) {
       </div>
       <div class="dialog-actions"><button class="button button-secondary" type="button" data-action="close-dialog">Cancelar</button><button class="button button-primary" type="submit">Guardar pagamento</button></div>
     </form>`);
+}
+
+function openChargePeriodForm(charge) {
+  const contract = state.contracts.find((item) => item.id === charge.contractId);
+  if (!contract) {
+    showToast("Não encontrei o contrato associado a esta cobrança.");
+    return;
+  }
+  const targetPeriod = addMonths(`${charge.period}-01`, 1).slice(0, 7);
+  const paid = getPaidAmount(charge);
+  showDialog(`
+    <form id="charge-period-form" data-id="${escapeHtml(charge.id)}">
+      <div class="dialog-heading"><div><p class="eyebrow">CORRIGIR REGISTO</p><h2 id="dialog-title">Corrigir mês da renda</h2></div><button class="dialog-close" type="button" data-action="close-dialog" aria-label="Fechar">×</button></div>
+      <div class="payment-context"><strong>${escapeHtml(propertyForContract(contract.id)?.name || "Imóvel")}</strong><span>${escapeHtml(contract.tenantName)} · recebido ${money.format(paid)}</span><small>Mês atual da renda: ${escapeHtml(formatMonth(charge.period))}</small></div>
+      <label class="form-field">Mês correto da renda<input name="period" type="month" required value="${escapeHtml(targetPeriod)}"></label>
+      <p class="notice-modal-intro">Isto altera o mês a que a cobrança corresponde, não a data nem o valor dos pagamentos recebidos. Se já existir uma cobrança do mesmo contrato nesse mês, só serão reunidas quando os valores e os pagamentos puderem ser conciliados sem ambiguidades.</p>
+      <div class="dialog-actions"><button class="button button-secondary" type="button" data-action="close-dialog">Cancelar</button><button class="button button-primary" type="submit">Rever correção</button></div>
+    </form>`);
+}
+
+function openChargePeriodConfirmation(chargeId, targetPeriod) {
+  const charge = state.charges.find((item) => item.id === chargeId);
+  const contract = state.contracts.find((item) => item.id === charge?.contractId);
+  if (!charge || !contract) throw new Error("Não encontrei esta cobrança. Atualize a página e tente novamente.");
+  const result = reclassifyChargePeriod(state.charges, contract, chargeId, targetPeriod);
+  const matchingCharge = state.charges.find((item) => (
+    item.id !== chargeId && item.contractId === contract.id && item.period === targetPeriod
+  ));
+  closeDialog(true);
+  showDialog(`
+    <div>
+      <div class="dialog-heading"><div><p class="eyebrow">REVER CORREÇÃO</p><h2 id="dialog-title">Confirmar mês da renda?</h2></div><button class="dialog-close" type="button" data-action="close-dialog" aria-label="Fechar">×</button></div>
+      <div class="payment-context"><strong>${escapeHtml(contract.tenantName)} · ${escapeHtml(propertyForContract(contract.id)?.name || "Imóvel")}</strong><span>${escapeHtml(formatMonth(charge.period))} → ${escapeHtml(formatMonth(targetPeriod))}</span><small>Valor recebido mantido: ${money.format(getPaidAmount(charge))}</small>${matchingCharge ? `<small>Será reunida com a cobrança existente de ${escapeHtml(formatMonth(targetPeriod))}.</small>` : ""}</div>
+      <p class="notice-modal-intro">O vencimento calculado pela antecedência atual do contrato (${contract.paymentAdvanceMonths} mês(es)) será ${formatDate(result.dueDate)}. ${result.merged ? "A cobrança existente e os registos de pagamento compatíveis serão preservados numa única linha." : "O registo e os pagamentos serão mantidos; apenas o mês da renda e o vencimento serão ajustados."} Se houver divergências, a aplicação recusa a alteração sem modificar dados.</p>
+      <div class="dialog-actions"><button class="button button-secondary" type="button" data-action="close-dialog">Cancelar</button><button class="button button-danger" type="button" data-action="confirm-charge-period" data-id="${escapeHtml(chargeId)}" data-period="${escapeHtml(targetPeriod)}">Confirmar correção</button></div>
+    </div>`);
 }
 
 function openPaymentDeletionConfirmation(charge, paymentIndex) {
@@ -1233,6 +1273,28 @@ document.addEventListener("click", async (event) => {
     openPaymentForm(state.charges.find((charge) => charge.id === id));
     return;
   }
+  if (action === "change-charge-period") {
+    openChargePeriodForm(state.charges.find((charge) => charge.id === id));
+    return;
+  }
+  if (action === "confirm-charge-period") {
+    const charge = state.charges.find((item) => item.id === id);
+    const contract = state.contracts.find((item) => item.id === charge?.contractId);
+    if (!charge || !contract) {
+      showToast("Não encontrei esta cobrança. Atualize a página e tente novamente.");
+      return;
+    }
+    try {
+      const result = reclassifyChargePeriod(state.charges, contract, charge.id, button.dataset.period);
+      state.charges = result.charges;
+      saveState("Mês da renda corrigido; os pagamentos foram preservados.");
+      closeDialog(true);
+      render();
+    } catch (error) {
+      showToast(error.message);
+    }
+    return;
+  }
   if (action === "delete-payment") {
     const charge = state.charges.find((item) => item.id === id);
     const paymentIndex = Number.parseInt(button.dataset.paymentIndex, 10);
@@ -1355,6 +1417,16 @@ document.addEventListener("submit", async (event) => {
     const values = Object.fromEntries(new FormData(form).entries());
     try {
       openPropertyMergeConfirmation(values.keepPropertyId, values.removePropertyId);
+    } catch (error) {
+      showToast(error.message);
+    }
+    return;
+  }
+  if (form.matches("#charge-period-form")) {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form).entries());
+    try {
+      openChargePeriodConfirmation(form.dataset.id, values.period);
     } catch (error) {
       showToast(error.message);
     }
