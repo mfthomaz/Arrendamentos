@@ -15,6 +15,7 @@ import {
   rescheduleFutureCharges,
   restoreContract,
   updateChargeWithholding,
+  updateUnpaidCharges,
 } from "../domain.js";
 
 test("addMonths clamps the day to the last day of the destination month", () => {
@@ -79,6 +80,33 @@ test("removing a mistaken payment preserves the charge and recalculates the bala
   assert.equal(summary.received, 300);
   assert.equal(summary.missing, 700);
   assert.equal(getChargeStatus(updated, "2027-02-10"), "partial-overdue");
+});
+
+test("contract rent updates unpaid current and future charges without changing paid or past charges", () => {
+  const contract = {
+    id: "c-shop",
+    status: "active",
+    monthlyRent: 1074,
+    nonResidential: true,
+  };
+  const charges = [
+    { id: "current", contractId: "c-shop", period: "2026-11", amount: 1450, payments: [] },
+    { id: "future", contractId: "c-shop", period: "2026-12", amount: 1200, payments: [] },
+    { id: "past", contractId: "c-shop", period: "2026-10", amount: 1450, payments: [] },
+    { id: "paid", contractId: "c-shop", period: "2026-11", amount: 1450, payments: [{ amount: 500, date: "2026-11-02" }] },
+    { id: "other-contract", contractId: "c-other", period: "2026-11", amount: 900, payments: [] },
+  ];
+
+  const updated = updateUnpaidCharges(charges, contract, "2026-11");
+
+  assert.equal(updated[0].amount, 1074);
+  assert.equal(updated[0].withholdingAmount, 268.5);
+  assert.equal(updated[0].netAmount, 805.5);
+  assert.equal(updated[1].amount, 1074);
+  assert.equal(updated[2].amount, 1450);
+  assert.equal(updated[3].amount, 1450);
+  assert.deepEqual(updated[3].payments, [{ amount: 500, date: "2026-11-02" }]);
+  assert.equal(updated[4].amount, 900);
 });
 
 test("active contract totals exclude future and expired leases", () => {

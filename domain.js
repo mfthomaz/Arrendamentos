@@ -59,6 +59,23 @@ export function removePayment(charge, paymentIndex) {
   };
 }
 
+export function updateUnpaidCharges(charges, contract, fromPeriod) {
+  if (contract.status !== "active") return charges;
+  let changed = false;
+  const updated = charges.map((charge) => {
+    if (charge.contractId !== contract.id || charge.period < fromPeriod || charge.payments?.length) {
+      return charge;
+    }
+    if (Number(charge.amount) === Number(contract.monthlyRent)) return charge;
+    changed = true;
+    return updateChargeWithholding({
+      ...charge,
+      amount: Number(contract.monthlyRent),
+    }, contract);
+  });
+  return changed ? updated : charges;
+}
+
 export function isNonResidentialProperty(property) {
   return property?.type === "Loja" || property?.type === "Escritório";
 }

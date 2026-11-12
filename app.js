@@ -15,6 +15,7 @@ import {
   restoreContract,
   toISODate,
   updateChargeWithholding,
+  updateUnpaidCharges,
 } from "./domain.js";
 import {
   createSupabaseClient,
@@ -102,11 +103,21 @@ function ensureCharges(period) {
     .filter((contract) => contract.status === "active")
     .map((contract) => Number(contract.paymentAdvanceMonths) || 0));
   let next = state.charges;
+  let changed = false;
   for (let offset = 0; offset <= advanceMonths; offset += 1) {
     const rentPeriod = addMonths(`${period}-01`, offset).slice(0, 7);
+    const previousLength = next.length;
     next = createCharges(state.contracts, next, rentPeriod);
+    if (next.length !== previousLength) changed = true;
   }
-  if (next.length !== state.charges.length) {
+  for (const contract of state.contracts) {
+    const updated = updateUnpaidCharges(next, contract, currentPeriod);
+    if (updated !== next) {
+      next = updated;
+      changed = true;
+    }
+  }
+  if (changed) {
     state.charges = next;
     saveState();
   }
