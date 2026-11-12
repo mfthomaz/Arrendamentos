@@ -10,6 +10,7 @@ import {
   getPaidAmount,
   getUpcomingEvents,
   isNonResidentialProperty,
+  removePayment,
   rescheduleFutureCharges,
   restoreContract,
   toISODate,
@@ -870,7 +871,9 @@ function renderPayments() {
         const rent = withholdingAmount
           ? `<strong>${money.format(netAmount)}</strong><span>Líquido a pagar</span><span>Renda bruta · ${money.format(charge.amount)}</span><span>Retenção (25%) · ${money.format(withholdingAmount)}</span>`
           : `<strong>${money.format(netAmount)}</strong>`;
-        return `<tr><td><strong>${escapeHtml(property?.name || "Imóvel")}</strong><span>${escapeHtml(contract?.tenantName || "")}</span></td><td>${formatMonth(charge.period)}</td><td>${formatDate(charge.dueDate)}</td><td>${rent}</td><td>${money.format(paid)}${charge.payments?.length ? `<span>Último · ${formatDate(charge.payments[charge.payments.length - 1].date)}</span>` : ""}</td><td><strong>${money.format(balance)}</strong></td><td><span class="status-badge ${statusClass(status)}">${statusLabel(status)}</span></td><td>${balance > 0 ? `<button class="button button-secondary button-small" type="button" data-action="register-payment" data-id="${escapeHtml(charge.id)}">Registar pagamento</button>` : '<span class="paid-check" aria-label="Totalmente recebida">✓</span>'}</td></tr>`;
+        const payments = charge.payments || [];
+        const received = `<strong>${money.format(paid)}</strong>${payments.length ? `<div class="payment-records">${payments.map((payment, paymentIndex) => `<div class="payment-record"><span>${money.format(payment.amount)} · ${formatDate(payment.date)}</span><button class="text-button payment-delete-button" type="button" data-action="delete-payment" data-id="${escapeHtml(charge.id)}" data-payment-index="${paymentIndex}" aria-label="Eliminar pagamento de ${money.format(payment.amount)} de ${escapeHtml(formatDate(payment.date))}">Eliminar</button></div>`).join("")}</div>` : ""}`;
+        return `<tr><td><strong>${escapeHtml(property?.name || "Imóvel")}</strong><span>${escapeHtml(contract?.tenantName || "")}</span></td><td>${formatMonth(charge.period)}</td><td>${formatDate(charge.dueDate)}</td><td>${rent}</td><td>${received}</td><td><strong>${money.format(balance)}</strong></td><td><span class="status-badge ${statusClass(status)}">${statusLabel(status)}</span></td><td>${balance > 0 ? `<button class="button button-secondary button-small" type="button" data-action="register-payment" data-id="${escapeHtml(charge.id)}">Registar pagamento</button>` : '<span class="paid-check" aria-label="Totalmente recebida">✓</span>'}</td></tr>`;
       }).join("")}
       </tbody></table></div>
     </section>` : `<section class="empty-state page-empty"><span class="empty-icon">€</span><h2>Sem rendas a pagar neste mês</h2><p>Não há cobranças com vencimento neste período. Pode selecionar outro mês ou adicionar um contrato.</p><button class="button button-primary" type="button" data-action="new-contract">Adicionar contrato</button></section>`}
@@ -1031,6 +1034,20 @@ function openPaymentForm(charge) {
     </form>`);
 }
 
+function openPaymentDeletionConfirmation(charge, paymentIndex) {
+  const payment = charge.payments?.[paymentIndex];
+  if (!payment) return;
+  const contract = state.contracts.find((item) => item.id === charge.contractId);
+  const property = propertyForContract(charge.contractId);
+  showDialog(`
+    <div>
+      <div class="dialog-heading"><div><p class="eyebrow">CORRIGIR REGISTO</p><h2 id="dialog-title">Eliminar pagamento?</h2></div><button class="dialog-close" type="button" data-action="close-dialog" aria-label="Fechar">×</button></div>
+      <div class="payment-context"><strong>${escapeHtml(property?.name || "Imóvel")}</strong><span>${escapeHtml(contract?.tenantName || "")} · ${escapeHtml(formatMonth(charge.period))}</span><small>${money.format(payment.amount)} recebidos em ${escapeHtml(formatDate(payment.date))}</small></div>
+      <p class="notice-modal-intro">Será eliminado apenas este registo de pagamento. A cobrança e os restantes pagamentos serão mantidos, e o valor em falta será recalculado.</p>
+      <div class="dialog-actions"><button class="button button-secondary" type="button" data-action="close-dialog">Cancelar</button><button class="button button-danger" type="button" data-action="confirm-delete-payment" data-id="${escapeHtml(charge.id)}" data-payment-index="${paymentIndex}">Eliminar pagamento</button></div>
+    </div>`);
+}
+
 function openNotice(contract) {
   const property = state.properties.find((item) => item.id === contract.propertyId);
   const noticeDate = addMonths(contract.adjustmentDate, -2);
@@ -1143,6 +1160,28 @@ document.addEventListener("click", async (event) => {
   if (action === "register-payment") {
     ensureCharges(selectedPeriod);
     openPaymentForm(state.charges.find((charge) => charge.id === id));
+    return;
+  }
+  if (action === "delete-payment") {
+    const charge = state.charges.find((item) => item.id === id);
+    const paymentIndex = Number.parseInt(button.dataset.paymentIndex, 10);
+    if (charge && Number.isInteger(paymentIndex)) openPaymentDeletionConfirmation(charge, paymentIndex);
+    return;
+  }
+  if (action === "confirm-delete-payment") {
+    const charge = state.charges.find((item) => item.id === id);
+    const paymentIndex = Number.parseInt(button.dataset.paymentIndex, 10);
+    if (charge?.payments?.[paymentIndex]) {
+      state.charges = state.charges.map((item) => (
+        item.id === charge.id ? removePayment(item, paymentIndex) : item
+      ));
+      saveState("Pagamento eliminado. O valor em falta foi atualizado.");
+    } else {
+      showToast("Este pagamento já não está disponível. Atualize a página e tente novamente.");
+    }
+    closeDialog(true);
+    render();
+    return;
   }
   if (action === "prepare-notice") openNotice(state.contracts.find((contract) => contract.id === contractId));
   if (action === "copy-notice") {

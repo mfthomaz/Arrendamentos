@@ -14,6 +14,10 @@ Ao criar ou editar um contrato, indique a finalidade **Não habitacional / empre
 
 Cada contrato permite indicar quantos meses antes do mês da renda esta deve ser paga (0–12). Por exemplo, com antecedência de 1 mês e vencimento no dia 8, a renda de janeiro de 2027 vence a 8 de dezembro de 2026. **Rendas e pagamentos** é organizado pelo mês de pagamento e mostra também o mês a que cada renda corresponde. Ao editar a antecedência, as cobranças futuras são reprogramadas; datas e pagamentos passados são preservados. Os contratos existentes usam por omissão 0 meses.
 
+## Corrigir pagamentos
+
+Em **Rendas e pagamentos**, cada pagamento registado aparece junto do valor recebido. Use **Eliminar** no pagamento incorreto e confirme; apenas esse registo é removido. A cobrança e quaisquer outros pagamentos ficam preservados, e o saldo em falta e os resumos são recalculados. A alteração é guardada localmente ou sincronizada com o Supabase, conforme a configuração da carteira.
+
 ## Demonstração local
 
 Sirva a pasta num servidor HTTP local, por exemplo com `npx serve .`, e abra o URL no navegador. A primeira execução sem Supabase cria cinco imóveis e quatro contratos de demonstração. Sem configurar um projeto, os dados ficam apenas no `localStorage` desse navegador e não são sincronizados.

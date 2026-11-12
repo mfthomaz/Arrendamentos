@@ -10,6 +10,8 @@ import {
   getChargeWithholding,
   getChargeDueDate,
   getUpcomingEvents,
+  getPaidAmount,
+  removePayment,
   rescheduleFutureCharges,
   restoreContract,
   updateChargeWithholding,
@@ -49,6 +51,34 @@ test("payment status and summary distinguish partial, late, and complete charges
   assert.equal(summary.overdue, 1600);
   assert.equal(summary.overdueCount, 2);
   assert.equal(summary.collectionRate, 1300 / 3700);
+});
+
+test("removing a mistaken payment preserves the charge and recalculates the balance", () => {
+  const charge = {
+    id: "charge-1",
+    contractId: "c-1",
+    period: "2027-02",
+    amount: 1000,
+    dueDate: "2027-02-05",
+    payments: [
+      { amount: 700, date: "2027-02-04" },
+      { amount: 300, date: "2027-02-05" },
+    ],
+  };
+
+  const updated = removePayment(charge, 0);
+  const summary = getChargeSummary([], [updated], "2027-02", "2027-02-10");
+
+  assert.equal(updated.id, charge.id);
+  assert.deepEqual(charge.payments, [
+    { amount: 700, date: "2027-02-04" },
+    { amount: 300, date: "2027-02-05" },
+  ]);
+  assert.deepEqual(updated.payments, [{ amount: 300, date: "2027-02-05" }]);
+  assert.equal(getPaidAmount(updated), 300);
+  assert.equal(summary.received, 300);
+  assert.equal(summary.missing, 700);
+  assert.equal(getChargeStatus(updated, "2027-02-10"), "partial-overdue");
 });
 
 test("active contract totals exclude future and expired leases", () => {

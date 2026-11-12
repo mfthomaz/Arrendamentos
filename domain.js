@@ -48,6 +48,17 @@ export function getPaidAmount(charge) {
   return (charge.payments || []).reduce((total, payment) => total + Number(payment.amount || 0), 0);
 }
 
+export function removePayment(charge, paymentIndex) {
+  if (!Array.isArray(charge.payments) || !Number.isInteger(paymentIndex)
+    || paymentIndex < 0 || paymentIndex >= charge.payments.length) {
+    throw new RangeError("Pagamento não encontrado.");
+  }
+  return {
+    ...charge,
+    payments: charge.payments.filter((_, index) => index !== paymentIndex),
+  };
+}
+
 export function isNonResidentialProperty(property) {
   return property?.type === "Loja" || property?.type === "Escritório";
 }
