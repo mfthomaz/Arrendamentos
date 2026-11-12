@@ -187,6 +187,123 @@ export function mergeSnapshots(remoteData, localData, baseData = null) {
   };
 }
 
+function withoutFields(record, fields) {
+  return Object.fromEntries(Object.entries(record).filter(([field]) => !fields.includes(field)));
+}
+
+function isMultisetSubset(subset, superset) {
+  const counts = new Map();
+  for (const value of superset) {
+    const key = stableValue(value);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  for (const value of subset) {
+    const key = stableValue(value);
+    const count = counts.get(key) || 0;
+    if (!count) return false;
+    counts.set(key, count - 1);
+  }
+  return true;
+}
+
+function mergePaymentHistories(targetPayments, sourcePayments) {
+  if (isMultisetSubset(targetPayments, sourcePayments)) return clone(sourcePayments);
+  if (isMultisetSubset(sourcePayments, targetPayments)) return clone(targetPayments);
+  throw new Error("Os históricos de pagamentos destes registos são diferentes. Não alterei nenhum dado.");
+}
+
+export function consolidateDuplicateProperties(data, keepPropertyId, removePropertyId) {
+  if (!keepPropertyId || !removePropertyId || keepPropertyId === removePropertyId) {
+    throw new Error("Escolha dois imóveis diferentes.");
+  }
+
+  const result = cloneData(data);
+  const keepProperty = result.properties.find((property) => property.id === keepPropertyId);
+  const removeProperty = result.properties.find((property) => property.id === removePropertyId);
+  if (!keepProperty || !removeProperty) throw new Error("Não encontrei ambos os imóveis. Atualize a página e tente novamente.");
+  if (stableValue(withoutFields(keepProperty, ["id", "address"]))
+    !== stableValue(withoutFields(removeProperty, ["id", "address"]))) {
+    throw new Error("Os dados dos imóveis diferem para além da morada. Não alterei nenhum dado.");
+  }
+
+  const keepContracts = result.contracts.filter((contract) => contract.propertyId === keepPropertyId);
+  const removeContracts = result.contracts.filter((contract) => contract.propertyId === removePropertyId);
+  if (keepContracts.length !== removeContracts.length) {
+    throw new Error("Os imóveis têm contratos diferentes. Não alterei nenhum dado.");
+  }
+
+  const matchedContracts = [];
+  const usedKeepContracts = new Set();
+  for (const removeContract of removeContracts) {
+    const signature = stableValue(withoutFields(removeContract, ["id", "propertyId"]));
+    const matches = keepContracts.filter((contract) => (
+      !usedKeepContracts.has(contract.id)
+      && stableValue(withoutFields(contract, ["id", "propertyId"])) === signature
+    ));
+    if (matches.length !== 1) {
+      throw new Error("Não consegui associar os contratos de forma inequívoca. Não alterei nenhum dado.");
+    }
+    usedKeepContracts.add(matches[0].id);
+    matchedContracts.push([matches[0], removeContract]);
+  }
+
+  const removeChargeIds = new Set();
+  let mergedChargeCount = 0;
+  for (const [keepContract, removeContract] of matchedContracts) {
+    const keepCharges = result.charges.filter((charge) => charge.contractId === keepContract.id);
+    const removeCharges = result.charges.filter((charge) => charge.contractId === removeContract.id);
+    const keepByPeriod = new Map();
+    const removeByPeriod = new Map();
+    for (const charge of keepCharges) {
+      if (keepByPeriod.has(charge.period)) {
+        throw new Error("Há várias cobranças do mesmo mês num contrato. Não alterei nenhum dado.");
+      }
+      keepByPeriod.set(charge.period, charge);
+    }
+    for (const charge of removeCharges) {
+      if (removeByPeriod.has(charge.period)) {
+        throw new Error("Há várias cobranças do mesmo mês num contrato. Não alterei nenhum dado.");
+      }
+      removeByPeriod.set(charge.period, charge);
+    }
+
+    for (const removeCharge of removeCharges) {
+      const keepCharge = keepByPeriod.get(removeCharge.period);
+      if (!keepCharge) {
+        removeCharge.contractId = keepContract.id;
+        mergedChargeCount += 1;
+        continue;
+      }
+      const keepTerms = withoutFields(keepCharge, ["id", "contractId", "payments"]);
+      const removeTerms = withoutFields(removeCharge, ["id", "contractId", "payments"]);
+      if (stableValue(keepTerms) !== stableValue(removeTerms)) {
+        throw new Error("Há cobranças do mesmo mês com valores ou datas diferentes. Não alterei nenhum dado.");
+      }
+      keepCharge.payments = mergePaymentHistories(keepCharge.payments || [], removeCharge.payments || []);
+      removeChargeIds.add(removeCharge.id);
+      mergedChargeCount += 1;
+    }
+  }
+
+  const removeContractIds = new Set(removeContracts.map((contract) => contract.id));
+  const keepContractIds = new Set(keepContracts.map((contract) => contract.id));
+  result.properties = result.properties.filter((property) => property.id !== removePropertyId);
+  result.contracts = result.contracts.filter((contract) => !removeContractIds.has(contract.id));
+  result.charges = result.charges.filter((charge) => !removeChargeIds.has(charge.id));
+
+  return {
+    data: result,
+    summary: {
+      removedProperties: 1,
+      mergedContracts: removeContracts.length,
+      mergedCharges: mergedChargeCount,
+      preservedPayments: result.charges
+        .filter((charge) => keepContractIds.has(charge.contractId))
+        .reduce((count, charge) => count + (charge.payments || []).length, 0),
+    },
+  };
+}
+
 export function hasRecords(data) {
   return Boolean(data && ["properties", "contracts", "charges"].some((key) => data[key]?.length));
 }

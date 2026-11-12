@@ -6,6 +6,10 @@ Aplicação web/PWA para gerir imóveis, contratos, cobranças e datas relevante
 
 Em **Contratos**, use **Arquivar** na linha do contrato e confirme a ação. O contrato deixa de contar como ativo e deixa de gerar novas cobranças e lembretes; o contrato e as cobranças/pagamentos já registados não são apagados. Consulte-os em **Rendas e pagamentos**, escolhendo o período correspondente. O filtro **Mostrar → Arquivados** permite localizar contratos arquivados; use **Restaurar** para reativar um contrato arquivado por engano sem recriar o histórico existente. Os dados locais e sincronizados recebem automaticamente os valores por omissão dos novos campos de arquivo.
 
+## Consolidar imóveis duplicados
+
+Em **Imóveis**, use **Consolidar duplicados**, escolha o registo com a morada que quer manter e o respetivo duplicado, reveja a confirmação e só então conclua. A aplicação só consolida quando os restantes dados do imóvel e os contratos coincidem e consegue combinar cobranças e pagamentos sem ambiguidades. Se os valores ou históricos diferirem, não altera dados; reveja os registos antes de tentar novamente.
+
 ## Arrendamentos não habitacionais
 
 Ao criar ou editar um contrato, indique a finalidade **Não habitacional / empresa** para arrendamentos não habitacionais e registe a renda bruta acordada. Imóveis classificados como **Loja** ou **Escritório** aplicam automaticamente esta finalidade. A aplicação calcula uma retenção fixa de 25% e apresenta o valor líquido (75%) a receber. As cobranças, saldos em falta e validação dos pagamentos usam o valor líquido; a renda bruta e a retenção também ficam visíveis no contrato e na cobrança. Ao alterar a finalidade ou classificar um imóvel como loja/escritório, as cobranças existentes são recalculadas sem alterar a renda bruta nem os pagamentos já registados. Contratos existentes noutros tipos de imóvel mantêm-se habitacionais até serem atualizados. A aplicação não submete declarações nem pagamentos fiscais.
@@ -57,7 +61,7 @@ O repositório atual é **público**. GitHub Pages publica um website acessível
 
 ## Limitações da sincronização
 
-É necessária ligação ao projeto Supabase para autenticar e sincronizar; não existe edição colaborativa em tempo real. As alterações são verificadas em intervalos curtos, ao recuperar a ligação e ao voltar à aplicação. Em conflito simultâneo, podem surgir cópias que devem ser revistas manualmente. Os dados de demonstração são apenas locais e não são semeados numa conta nova. A aplicação não liga a bancos, não processa pagamentos e não envia notificações ou avisos aos arrendatários.
+É necessária ligação ao projeto Supabase para autenticar e sincronizar; não existe edição colaborativa em tempo real. As alterações são verificadas em intervalos curtos, ao recuperar a ligação e ao voltar à aplicação. Em conflito simultâneo, podem surgir cópias: duplicados exatos podem ser consolidados em **Imóveis**; registos com dados, contratos ou pagamentos diferentes têm de ser revistos antes de qualquer remoção. Os dados de demonstração são apenas locais e não são semeados numa conta nova. A aplicação não liga a bancos, não processa pagamentos e não envia notificações ou avisos aos arrendatários.
 
 ## Testes e build
 

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  consolidateDuplicateProperties,
   emptyData,
   hasRecords,
   mergeSnapshots,
@@ -115,6 +116,99 @@ test("simultaneous conflicting edits remain preserved as linked copies", () => {
   assert.ok(localProperty.id !== "p-1");
   assert.ok(localContract.id !== "c-1");
   assert.ok(localCharge.id !== "charge-1");
+});
+
+test("consolidating duplicate properties keeps one contract and preserves merged charge history", () => {
+  const data = {
+    properties: [
+      { id: "p-keep", name: "Apartamento", address: "Rua atual", type: "Apartamento", bedrooms: 2, area: 65 },
+      { id: "p-remove", name: "Apartamento", address: "Rua antiga", type: "Apartamento", bedrooms: 2, area: 65 },
+    ],
+    contracts: [
+      { id: "c-keep", propertyId: "p-keep", tenantName: "João", monthlyRent: 900, startDate: "2026-01-01" },
+      { id: "c-remove", propertyId: "p-remove", tenantName: "João", monthlyRent: 900, startDate: "2026-01-01" },
+    ],
+    charges: [
+      { id: "charge-keep", contractId: "c-keep", period: "2026-10", amount: 900, dueDate: "2026-10-05", payments: [{ amount: 700, date: "2026-10-04" }, { amount: 200, date: "2026-10-05" }] },
+      { id: "charge-remove", contractId: "c-remove", period: "2026-10", amount: 900, dueDate: "2026-10-05", payments: [{ amount: 700, date: "2026-10-04" }] },
+      { id: "charge-next", contractId: "c-remove", period: "2026-11", amount: 900, dueDate: "2026-11-05", payments: [] },
+    ],
+  };
+
+  const result = consolidateDuplicateProperties(data, "p-keep", "p-remove");
+
+  assert.deepEqual(result.data.properties, [data.properties[0]]);
+  assert.equal(result.data.contracts.length, 1);
+  assert.equal(result.data.contracts[0].id, "c-keep");
+  assert.equal(result.data.charges.length, 2);
+  assert.deepEqual(result.data.charges.find((charge) => charge.period === "2026-10").payments, [
+    { amount: 700, date: "2026-10-04" },
+    { amount: 200, date: "2026-10-05" },
+  ]);
+  assert.equal(result.data.charges.find((charge) => charge.period === "2026-11").contractId, "c-keep");
+  assert.equal(result.summary.removedProperties, 1);
+  assert.equal(result.summary.mergedContracts, 1);
+  assert.equal(result.summary.mergedCharges, 2);
+  assert.deepEqual(data.properties.map((property) => property.id), ["p-keep", "p-remove"]);
+  assert.equal(data.contracts.length, 2);
+});
+
+test("consolidating properties refuses conflicting payment histories without changing data", () => {
+  const data = {
+    properties: [
+      { id: "p-keep", name: "Apartamento", address: "Rua atual" },
+      { id: "p-remove", name: "Apartamento", address: "Rua antiga" },
+    ],
+    contracts: [
+      { id: "c-keep", propertyId: "p-keep", tenantName: "João", monthlyRent: 900 },
+      { id: "c-remove", propertyId: "p-remove", tenantName: "João", monthlyRent: 900 },
+    ],
+    charges: [
+      { id: "charge-keep", contractId: "c-keep", period: "2026-10", amount: 900, dueDate: "2026-10-05", payments: [{ amount: 700, date: "2026-10-04" }] },
+      { id: "charge-remove", contractId: "c-remove", period: "2026-10", amount: 900, dueDate: "2026-10-05", payments: [{ amount: 500, date: "2026-10-04" }] },
+    ],
+  };
+  const original = JSON.stringify(data);
+
+  assert.throws(
+    () => consolidateDuplicateProperties(data, "p-keep", "p-remove"),
+    /históricos de pagamentos/,
+  );
+  assert.equal(JSON.stringify(data), original);
+});
+
+test("consolidating properties refuses contracts with different terms", () => {
+  const data = {
+    properties: [{ id: "p-keep" }, { id: "p-remove" }],
+    contracts: [
+      { id: "c-keep", propertyId: "p-keep", monthlyRent: 900 },
+      { id: "c-remove", propertyId: "p-remove", monthlyRent: 1000 },
+    ],
+    charges: [],
+  };
+
+  assert.throws(
+    () => consolidateDuplicateProperties(data, "p-keep", "p-remove"),
+    /contratos diferentes/,
+  );
+});
+
+test("consolidating properties refuses different property details without changing data", () => {
+  const data = {
+    properties: [
+      { id: "p-keep", name: "Apartamento", address: "Rua atual", type: "Apartamento" },
+      { id: "p-remove", name: "Apartamento", address: "Rua antiga", type: "Moradia" },
+    ],
+    contracts: [],
+    charges: [],
+  };
+  const original = JSON.stringify(data);
+
+  assert.throws(
+    () => consolidateDuplicateProperties(data, "p-keep", "p-remove"),
+    /diferem para além da morada/,
+  );
+  assert.equal(JSON.stringify(data), original);
 });
 
 test("legacy contracts receive default archive fields without changing existing records", () => {

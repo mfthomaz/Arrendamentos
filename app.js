@@ -19,6 +19,7 @@ import {
 } from "./domain.js";
 import {
   cloneData,
+  consolidateDuplicateProperties,
   createSupabaseClient,
   emptyData,
   hasRecords,
@@ -818,7 +819,7 @@ function renderProperties() {
   return `
     <section class="page-heading">
       <div><p class="eyebrow">A SUA CARTEIRA</p><h1>Imóveis</h1><p class="heading-subtitle">${state.properties.length} ${state.properties.length === 1 ? "imóvel registado" : "imóveis registados"} · a carteira pode crescer consigo</p></div>
-      <button class="button button-primary" type="button" data-action="new-property"><span aria-hidden="true">＋</span> Adicionar imóvel</button>
+      <div class="page-heading-actions">${state.properties.length > 1 ? '<button class="button button-secondary" type="button" data-action="merge-properties">Consolidar duplicados</button>' : ""}<button class="button button-primary" type="button" data-action="new-property"><span aria-hidden="true">＋</span> Adicionar imóvel</button></div>
     </section>
     ${state.properties.length ? `<section class="property-grid" aria-label="Lista de imóveis">
       ${state.properties.map((property) => {
@@ -1005,6 +1006,40 @@ function openPropertyForm(property) {
     </form>`);
 }
 
+function openPropertyMergeForm() {
+  const options = state.properties.map((property) => (
+    `<option value="${escapeHtml(property.id)}">${escapeHtml(property.name)} · ${escapeHtml(property.address)}</option>`
+  )).join("");
+  showDialog(`
+    <form id="merge-properties-form">
+      <div class="dialog-heading"><div><p class="eyebrow">CORRIGIR DUPLICADOS</p><h2 id="dialog-title">Consolidar imóveis</h2></div><button class="dialog-close" type="button" data-action="close-dialog" aria-label="Fechar">×</button></div>
+      <p class="notice-modal-intro">Escolha o registo que quer manter (por exemplo, o que tem a morada correta) e o duplicado. Só avanço se os contratos coincidirem e as cobranças e pagamentos puderem ser preservados sem ambiguidades.</p>
+      <div class="form-grid">
+        <label class="form-field form-field-wide">Manter este imóvel<select name="keepPropertyId" required>${options}</select></label>
+        <label class="form-field form-field-wide">Consolidar este duplicado<select name="removePropertyId" required>${options}</select></label>
+      </div>
+      <div class="dialog-actions"><button class="button button-secondary" type="button" data-action="close-dialog">Cancelar</button><button class="button button-primary" type="submit">Rever alterações</button></div>
+    </form>`);
+  const selects = dialogContent.querySelectorAll("select");
+  if (selects.length > 1 && selects[1].options.length > 1) selects[1].selectedIndex = 1;
+  const form = dialogContent.querySelector("#merge-properties-form");
+  if (form) form.dataset.initialValues = JSON.stringify(Object.fromEntries(new FormData(form).entries()));
+}
+
+function openPropertyMergeConfirmation(keepPropertyId, removePropertyId) {
+  const result = consolidateDuplicateProperties(state, keepPropertyId, removePropertyId);
+  const keepProperty = state.properties.find((property) => property.id === keepPropertyId);
+  const removeProperty = state.properties.find((property) => property.id === removePropertyId);
+  closeDialog(true);
+  showDialog(`
+    <div>
+      <div class="dialog-heading"><div><p class="eyebrow">REVER CONSOLIDAÇÃO</p><h2 id="dialog-title">Confirmar imóveis duplicados?</h2></div><button class="dialog-close" type="button" data-action="close-dialog" aria-label="Fechar">×</button></div>
+      <div class="payment-context"><strong>Manter · ${escapeHtml(keepProperty.name)}</strong><span>${escapeHtml(keepProperty.address)}</span><strong>Consolidar · ${escapeHtml(removeProperty.name)}</strong><span>${escapeHtml(removeProperty.address)}</span></div>
+      <p class="notice-modal-intro">Será removido o registo duplicado de imóvel e os contratos correspondentes serão reunidos. ${result.summary.mergedCharges} cobranças serão movidas ou consolidadas, e ${result.summary.preservedPayments} registos de pagamento serão preservados. Se os dados, contratos, valores ou históricos não coincidirem, a operação será recusada sem alterar dados.</p>
+      <div class="dialog-actions"><button class="button button-secondary" type="button" data-action="close-dialog">Cancelar</button><button class="button button-danger" type="button" data-action="confirm-merge-properties" data-keep-property-id="${escapeHtml(keepPropertyId)}" data-remove-property-id="${escapeHtml(removePropertyId)}">Consolidar e preservar histórico</button></div>
+    </div>`);
+}
+
 function openContractForm(contract, preferredPropertyId) {
   if (!state.properties.length) {
     closeDialog();
@@ -1164,6 +1199,7 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "close-dialog") closeDialog();
   if (action === "new-property") openPropertyForm();
+  if (action === "merge-properties") openPropertyMergeForm();
   if (action === "edit-property") openPropertyForm(state.properties.find((property) => property.id === id));
   if (action === "new-contract") openContractForm(null, propertyId);
   if (action === "edit-contract") openContractForm(state.contracts.find((contract) => contract.id === id));
@@ -1216,6 +1252,22 @@ document.addEventListener("click", async (event) => {
     }
     closeDialog(true);
     render();
+    return;
+  }
+  if (action === "confirm-merge-properties") {
+    try {
+      const result = consolidateDuplicateProperties(
+        state,
+        button.dataset.keepPropertyId,
+        button.dataset.removePropertyId,
+      );
+      state = result.data;
+      saveState("Imóveis consolidados. Os contratos, cobranças e pagamentos correspondentes foram preservados.");
+      closeDialog(true);
+      render();
+    } catch (error) {
+      showToast(error.message);
+    }
     return;
   }
   if (action === "prepare-notice") openNotice(state.contracts.find((contract) => contract.id === contractId));
@@ -1296,6 +1348,16 @@ document.addEventListener("submit", async (event) => {
     authMode = "signin";
     setCloudStatus("signed-out");
     renderAuth("Configuração guardada neste navegador.");
+    return;
+  }
+  if (form.matches("#merge-properties-form")) {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form).entries());
+    try {
+      openPropertyMergeConfirmation(values.keepPropertyId, values.removePropertyId);
+    } catch (error) {
+      showToast(error.message);
+    }
     return;
   }
   if (!form.matches("#property-form, #contract-form, #payment-form")) return;
