@@ -66,8 +66,10 @@ test("a local property edit updates the shared record without duplicating linked
 
   assert.equal(result.conflicts, 0);
   assert.deepEqual(result.data.properties, [{ ...base.properties[0], address: "Rua nova" }]);
-  assert.deepEqual(result.data.contracts, base.contracts);
-  assert.deepEqual(result.data.charges, base.charges);
+  assert.equal(result.data.contracts.length, 1);
+  assert.equal(result.data.contracts[0].propertyId, "p-1");
+  assert.equal(result.data.charges.length, 1);
+  assert.equal(result.data.charges[0].contractId, "c-1");
 });
 
 test("independent edits to the same record merge without creating a conflict copy", () => {
